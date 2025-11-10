@@ -186,6 +186,9 @@ namespace IntersectionOrdering {
         Rotation rotate = Rotation::NONE;
         Translation translate = Translation{};
         bool transpose = false;
+
+        // Return a human-readable summary of the piece
+        std::string ToString() const;
     };
 
     struct Ordering {
@@ -199,10 +202,33 @@ namespace IntersectionOrdering {
         PuzzlePiece* currentPiece = nullptr;
     };
 
+    // Parsing functions
     uint32_t ParsePieceId(std::string_view section);
     std::vector<uint32_t> ParseIdList(std::string_view value);
     bool ParsePieceValue(std::string_view value, PreviewEffect& previewEffect);
     CheckType ParseCheckType(std::string_view value);
     int IniHandler(void* user, const char* section, const char* key, const char* value);
+
+    // Transformation utility functions (based on SC4 source)
+    // RotatePoint: Rotate a 2D point (x, y) based on rotation amount (0-3 = 0°, 90°, 180°, 270°)
+    void RotatePoint(float& x, float& y, int rotation);
+
+    // RotateEdgeFlags: Rotate edge constraint flags (bitwise rotation)
+    uint32_t RotateEdgeFlags(uint32_t flags, int rotation);
+
+    // RotateConstraint: Map constraint bytes to rotated equivalents
+    uint8_t RotateConstraint(uint8_t constraint);
+
+    // RotateMap: Rotate a byte map (grid) in place, optionally applying constraint rotation
+    void RotateMap(std::vector<uint8_t>& mapData, int& width, int& height, int& centerX, int& centerY,
+                   int rotation, bool rotateConstraints);
+
+    // Piece transformation functions
+    void CopyPuzzlePiece(const PuzzlePiece& source, PuzzlePiece& dest);
+    void ApplyRotation(PuzzlePiece& piece, Rotation rotation);
+    void ApplyTranspose(PuzzlePiece& piece);
+    void ApplyTranslation(PuzzlePiece& piece);
+
+    // Main transformation pipeline
     void BuildNavigationIndices(Data& data);
 }

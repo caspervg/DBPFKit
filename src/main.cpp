@@ -1,6 +1,8 @@
 #include <iostream>
 #include <ostream>
 #include <print>
+#include <ranges>
+
 #include "RUL0.h"
 #include "ini.h"
 
@@ -10,7 +12,20 @@ auto main() -> int {
         std::println("An error occurred during parsing");
     }
 
-    for (auto& [id, piece] : data.puzzlePieces) {
-        std::cout << "Piece 0x" << std::hex << id << ": " << piece.effect.name << "\n";
+    // Apply transformations (CopyFrom, Rotate, Transpose, Translate)
+    IntersectionOrdering::BuildNavigationIndices(data);
+
+    std::println("Loaded {} puzzle pieces", data.puzzlePieces.size());
+    std::println("");
+
+    // Display a few pieces as examples
+    auto count = 0;
+    for (auto& piece : data.puzzlePieces | std::views::values) {
+        if (!piece.copyFrom || true) {
+            std::println("{}", piece.ToString());
+            std::println("");
+            count++;
+        }
     }
+    std::println("{}", count);
 }

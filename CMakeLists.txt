@@ -52,7 +52,9 @@ add_subdirectory(vendor/catch2)
 add_library(SC4RULParserLib STATIC
     vendor/inih/ini.c
     src/RUL0.cpp
+    src/FSHReader.cpp
     src/QFSDecompressor.cpp
+    src/Exemplar.cpp
     src/DBPFReader.cpp
     src/S3DReader.cpp
     src/TGI.cpp

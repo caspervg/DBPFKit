@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#define QFS_DEBUG true
+
 namespace QFS {
 
     constexpr uint16_t MAGIC_COMPRESSED = 0x10FB;

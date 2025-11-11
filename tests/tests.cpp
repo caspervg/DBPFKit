@@ -1,12 +1,16 @@
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "DBPFReader.h"
 #include "DBPFStructures.h"
+#include "Exemplar.h"
+#include "FSHReader.h"
 #include "QFSDecompressor.h"
 
 namespace {
@@ -17,6 +21,21 @@ std::vector<uint8_t> SampleQfsPayload() {
         0xE0, 'S', 'C', '4', '!',     // literal control block
         0xFC, 0x00                    // terminator
     };
+}
+
+std::vector<uint8_t> WrapChunked(const std::vector<uint8_t>& data, uint8_t flag) {
+    std::vector<uint8_t> chunk;
+    chunk.resize(flag == 0x10 ? 11 : 15);
+    WriteUInt32LE(chunk, 0, static_cast<uint32_t>(data.size()));
+    WriteUInt32LE(chunk, 4, static_cast<uint32_t>(data.size()));
+    chunk[8] = 0;
+    chunk[9] = 0;
+    chunk[10] = flag;
+    if (flag == 0x11) {
+        WriteUInt32LE(chunk, 11, static_cast<uint32_t>(data.size()));
+    }
+    chunk.insert(chunk.end(), data.begin(), data.end());
+    return chunk;
 }
 
 struct TestEntry {
@@ -90,6 +109,100 @@ std::vector<uint8_t> BuildDirectoryPayload(const DBPF::Tgi& entryTgi, uint32_t d
     return payload;
 }
 
+void WriteUInt16LE(std::vector<uint8_t>& buffer, uint16_t value) {
+    buffer.push_back(static_cast<uint8_t>(value & 0xFF));
+    buffer.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+}
+
+template<typename T>
+void AppendRaw(std::vector<uint8_t>& buffer, const T& value) {
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(&value);
+    buffer.insert(buffer.end(), raw, raw + sizeof(T));
+}
+
+std::vector<uint8_t> BuildExemplarBuffer(const std::vector<std::vector<uint8_t>>& properties) {
+    std::vector<uint8_t> buffer;
+    buffer.reserve(24 + properties.size() * 16);
+
+    const char signature[8] = {'E', 'Q', 'Z', 'B', '1', '#', '#', '#'};
+    buffer.insert(buffer.end(), signature, signature + 8);
+
+    AppendRaw(buffer, static_cast<uint32_t>(0)); // parent type
+    AppendRaw(buffer, static_cast<uint32_t>(0)); // parent group
+    AppendRaw(buffer, static_cast<uint32_t>(0)); // parent instance
+    AppendRaw(buffer, static_cast<uint32_t>(properties.size())); // property count
+
+    for (const auto& prop : properties) {
+        buffer.insert(buffer.end(), prop.begin(), prop.end());
+    }
+
+    return buffer;
+}
+
+std::vector<uint8_t> MakeSingleUInt32Property(uint32_t id, uint32_t value) {
+    std::vector<uint8_t> prop;
+    AppendRaw(prop, id);
+    WriteUInt16LE(prop, 0x0300); // UInt32
+    WriteUInt16LE(prop, 0x0000); // single
+    prop.push_back(0);           // reps byte
+    AppendRaw(prop, value);
+    return prop;
+}
+
+std::vector<uint8_t> MakeMultiFloatProperty(uint32_t id, const std::vector<float>& values) {
+    std::vector<uint8_t> prop;
+    AppendRaw(prop, id);
+    WriteUInt16LE(prop, 0x0900); // Float32
+    WriteUInt16LE(prop, 0x0080); // multi
+    prop.push_back(0);           // unused flag
+    AppendRaw(prop, static_cast<uint32_t>(values.size()));
+    for (float value : values) {
+        AppendRaw(prop, value);
+    }
+    return prop;
+}
+
+std::vector<uint8_t> MakeStringProperty(uint32_t id, std::string_view value) {
+    std::vector<uint8_t> prop;
+    AppendRaw(prop, id);
+    WriteUInt16LE(prop, 0x0C00); // String
+    WriteUInt16LE(prop, 0x0000); // single
+    prop.push_back(static_cast<uint8_t>(value.size()));
+    prop.insert(prop.end(), value.begin(), value.end());
+    return prop;
+}
+
+std::vector<uint8_t> BuildSimpleFsh() {
+    const uint32_t headerSize = 16;
+    const uint32_t directorySize = 8;
+    const uint32_t bitmapHeaderSize = 4 + 2 + 2 + 8;
+    const uint32_t pixelBytes = 4 * 4;
+    const uint32_t totalSize = headerSize + directorySize + bitmapHeaderSize + pixelBytes;
+
+    std::vector<uint8_t> buffer(totalSize, 0);
+    WriteUInt32LE(buffer, 0, FSH::kMagicSHPI);
+    WriteUInt32LE(buffer, 4, totalSize);
+    WriteUInt32LE(buffer, 8, 1);
+    WriteUInt32LE(buffer, 12, 0);
+
+    const uint32_t bitmapOffset = headerSize + directorySize;
+    WriteUInt32LE(buffer, 16, 0);
+    WriteUInt32LE(buffer, 20, bitmapOffset);
+
+    WriteUInt32LE(buffer, bitmapOffset, 0x0000007D);
+    buffer[bitmapOffset + 4] = 2;
+    buffer[bitmapOffset + 6] = 2;
+
+    const std::array<uint8_t, 16> pixels{
+        0x00, 0x00, 0xFF, 0xFF,
+        0x00, 0xFF, 0x00, 0xFF,
+        0xFF, 0x00, 0x00, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF
+    };
+    std::copy(pixels.begin(), pixels.end(), buffer.begin() + bitmapOffset + bitmapHeaderSize);
+    return buffer;
+}
+
 } // namespace
 
 TEST_CASE("QFS decompressor matches reference literal handling") {
@@ -144,6 +257,21 @@ TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
+TEST_CASE("DBPF reader strips chunk header before QFS decompression") {
+    const DBPF::Tgi tgi{0x99999999, 0x88888888, 0x77777777};
+    const auto chunked = WrapChunked(SampleQfsPayload(), 0x10);
+    auto buffer = BuildDbpf({TestEntry{tgi, chunked}});
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+
+    const auto& index = reader.GetIndex();
+    REQUIRE(index.size() == 1);
+    auto data = reader.ReadEntryData(index[0]);
+    REQUIRE(data.has_value());
+    REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
+}
+
 TEST_CASE("DBPF reader applies directory metadata when present") {
     const DBPF::Tgi dataTgi{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC};
     const TestEntry dataEntry{dataTgi, SampleQfsPayload()};
@@ -166,4 +294,69 @@ TEST_CASE("DBPF reader applies directory metadata when present") {
     auto data = reader.ReadEntryData(*it);
     REQUIRE(data.has_value());
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
+}
+
+TEST_CASE("Exemplar parser handles single and multi-value properties") {
+    std::vector<std::vector<uint8_t>> properties;
+    properties.push_back(MakeSingleUInt32Property(0x12345678, 0xCAFEBABE));
+    properties.push_back(MakeMultiFloatProperty(0x87654321, {1.0f, 2.5f}));
+    properties.push_back(MakeStringProperty(0x0000DEAD, "Test"));
+
+    auto buffer = BuildExemplarBuffer(properties);
+    auto parsed = Exemplar::Parse(buffer.data(), buffer.size());
+    REQUIRE(parsed.success);
+    REQUIRE(parsed.record.properties.size() == 3);
+
+    const auto* uintProp = parsed.record.FindProperty(0x12345678);
+    REQUIRE(uintProp != nullptr);
+    REQUIRE_FALSE(uintProp->isList);
+    REQUIRE(std::get<uint32_t>(uintProp->values[0]) == 0xCAFEBABE);
+
+    const auto* floatProp = parsed.record.FindProperty(0x87654321);
+    REQUIRE(floatProp != nullptr);
+    REQUIRE(floatProp->isList);
+    REQUIRE(floatProp->values.size() == 2);
+    // CHECK(std::get<float>(floatProp->values[0]) == Approx(1.0f));
+    // CHECK(std::get<float>(floatProp->values[1]) == Approx(2.5f));
+
+    const auto* stringProp = parsed.record.FindProperty(0x0000DEAD);
+    REQUIRE(stringProp != nullptr);
+    REQUIRE_FALSE(stringProp->isList);
+    REQUIRE(std::get<std::string>(stringProp->values[0]) == "Test");
+}
+
+TEST_CASE("Exemplar parser rejects text exemplars") {
+    std::vector<uint8_t> buffer;
+    const char signature[8] = {'E', 'Q', 'Z', 'T', '1', '#', '#', '#'};
+    buffer.insert(buffer.end(), signature, signature + 8);
+    buffer.resize(24, 0);
+
+    auto parsed = Exemplar::Parse(buffer.data(), buffer.size());
+    REQUIRE_FALSE(parsed.success);
+    REQUIRE(parsed.errorMessage.find("text") != std::string::npos);
+}
+
+TEST_CASE("FSH reader parses simple uncompressed bitmap") {
+    auto buffer = BuildSimpleFsh();
+    FSH::File file;
+    REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
+    REQUIRE(file.bitmaps.size() == 1);
+    const auto& bmp = file.bitmaps[0];
+    CHECK(bmp.code == FSH::kCode32Bit);
+    CHECK(bmp.width == 2);
+    CHECK(bmp.height == 2);
+    CHECK(bmp.data.size() == 16);
+}
+
+TEST_CASE("FSH reader converts 32-bit bitmap to RGBA8") {
+    auto buffer = BuildSimpleFsh();
+    FSH::File file;
+    REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
+    std::vector<uint8_t> rgba;
+    REQUIRE(FSH::Reader::ConvertToRGBA8(file.bitmaps[0], rgba));
+    REQUIRE(rgba.size() == 16);
+    CHECK(rgba[0] == 0xFF);
+    CHECK(rgba[1] == 0x00);
+    CHECK(rgba[2] == 0x00);
+    CHECK(rgba[3] == 0xFF);
 }

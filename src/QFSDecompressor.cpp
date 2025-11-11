@@ -1,53 +1,27 @@
 #include "QFSDecompressor.h"
 
+#include <print>
+
 namespace {
 
-    constexpr size_t kHeaderSize = 5;
-    constexpr size_t kChunkedHeaderSize = 8;
-    constexpr uint8_t kChunkFlag = 0x01;
-
-    struct QFSHeader {
-        uint32_t uncompressedSize = 0;
-        size_t dataOffset = 0;
-    };
-
-    uint16_t ReadSignature(const uint8_t* data) {
-        return static_cast<uint16_t>((static_cast<uint16_t>(data[0] & 0xFE) << 8) | data[1]);
+    inline uint32_t Read24BE(const uint8_t* data) {
+        return (static_cast<uint32_t>(data[2]) << 16) |
+               (static_cast<uint32_t>(data[3]) << 8) |
+               static_cast<uint32_t>(data[4]);
     }
 
-    bool ParseHeader(const uint8_t* input, size_t inputSize, QFSHeader& header) {
-        if (!input || inputSize < kHeaderSize) {
-            return false;
-        }
-
-        if (ReadSignature(input) != QFS::MAGIC_COMPRESSED) {
-            return false;
-        }
-
-        header.uncompressedSize = (static_cast<uint32_t>(input[2]) << 16) |
-            (static_cast<uint32_t>(input[3]) << 8) |
-            static_cast<uint32_t>(input[4]);
-
-        header.dataOffset = (input[0] & kChunkFlag) ? kChunkedHeaderSize : kHeaderSize;
-        if (header.dataOffset > inputSize) {
-            return false;
-        }
-
-        return true;
+    inline void CopyLiteral(const uint8_t* src, uint8_t* dest, size_t len) {
+        if (len == 0) return;
+        std::memcpy(dest, src, len);
     }
 
-    bool CopyFromHistory(uint8_t* output, size_t& outPos, size_t outputSize,
-                         size_t offset, size_t length) {
-        if (offset == 0 || offset > outPos) {
+    inline bool OffsetCopy(uint8_t* buffer, int destPos, int offset, int len) {
+        if (offset <= 0 || offset > destPos) {
             return false;
         }
-        if (outPos + length > outputSize) {
-            return false;
-        }
-
-        size_t srcPos = outPos - offset;
-        for (size_t i = 0; i < length; ++i) {
-            output[outPos++] = output[srcPos++];
+        int srcPos = destPos - offset;
+        for (int i = 0; i < len; ++i) {
+            buffer[destPos + i] = buffer[srcPos + i];
         }
         return true;
     }
@@ -57,19 +31,21 @@ namespace {
 namespace QFS {
 
     bool Decompressor::Decompress(const uint8_t* input, size_t inputSize, std::vector<uint8_t>& output) {
-        QFSHeader header{};
-        if (!ParseHeader(input, inputSize, header)) {
+        if (!input || inputSize < 5) {
             return false;
         }
 
-        output.assign(header.uncompressedSize, 0);
-        if (header.uncompressedSize == 0) {
+        if (((static_cast<uint16_t>(input[0] & 0xFE) << 8) | input[1]) != MAGIC_COMPRESSED) {
+            return false;
+        }
+
+        const uint32_t uncompressedSize = Read24BE(input);
+        output.assign(uncompressedSize, 0);
+        if (uncompressedSize == 0) {
             return true;
         }
 
-        const uint8_t* compressedData = input + header.dataOffset;
-        const size_t compressedSize = inputSize - header.dataOffset;
-        if (!DecompressInternal(compressedData, compressedSize, output.data(), header.uncompressedSize)) {
+        if (!DecompressInternal(input, inputSize, output.data(), uncompressedSize)) {
             output.clear();
             return false;
         }
@@ -78,132 +54,105 @@ namespace QFS {
     }
 
     bool Decompressor::IsQFSCompressed(const uint8_t* data, size_t size) {
-        if (!data || size < kHeaderSize) {
+        if (!data || size < 5) {
             return false;
         }
-        return ReadSignature(data) == MAGIC_COMPRESSED;
+        return ((static_cast<uint16_t>(data[0] & 0xFE) << 8) | data[1]) == MAGIC_COMPRESSED;
     }
 
     uint32_t Decompressor::GetUncompressedSize(const uint8_t* data, size_t size) {
-        QFSHeader header{};
-        if (!ParseHeader(data, size, header)) {
+        if (!IsQFSCompressed(data, size)) {
             return 0;
         }
-        return header.uncompressedSize;
+        return Read24BE(data);
     }
 
     bool Decompressor::DecompressInternal(const uint8_t* input, size_t inputSize,
                                           uint8_t* output, size_t outputSize) {
-        size_t inPos = 0;
-        size_t outPos = 0;
+        int inPos = (input[0] & 0x01) ? 8 : 5;
+        int outPos = 0;
+        int control1 = 0;
 
-        while (inPos < inputSize && input[inPos] < 0xFC) {
-            uint8_t packcode = input[inPos];
+        while (inPos < static_cast<int>(inputSize) && control1 < 0xFC) {
+            control1 = input[inPos++] & 0xFF;
 
-            if ((packcode & 0x80) == 0) {
-                if (inPos + 1 >= inputSize) {
+            if (control1 <= 0x7F) {
+                if (inPos >= static_cast<int>(inputSize)) return false;
+                int control2 = input[inPos++] & 0xFF;
+                int literalLen = control1 & 0x03;
+                if (inPos + literalLen > static_cast<int>(inputSize) || outPos + literalLen > static_cast<int>(outputSize)) {
                     return false;
                 }
-                uint8_t a = input[inPos + 1];
-                size_t literalLen = packcode & 0x03;
-                if (inPos + 2 + literalLen > inputSize) {
-                    return false;
-                }
-                if (outPos + literalLen > outputSize) {
-                    return false;
-                }
-                std::memcpy(output + outPos, input + inPos + 2, literalLen);
+                CopyLiteral(input + inPos, output + outPos, literalLen);
                 outPos += literalLen;
-                inPos += literalLen + 2;
+                inPos += literalLen;
 
-                size_t copyLen = ((packcode & 0x1C) >> 2) + 3;
-                size_t offset = ((packcode >> 5) << 8) + a + 1;
-                if (!CopyFromHistory(output, outPos, outputSize, offset, copyLen)) {
+                int offset = ((control1 & 0x60) << 3) + control2 + 1;
+                int copyLen = ((control1 & 0x1C) >> 2) + 3;
+                if (outPos + copyLen > static_cast<int>(outputSize) || !OffsetCopy(output, outPos, offset, copyLen)) {
                     return false;
                 }
-            }
-            else if ((packcode & 0x40) == 0) {
-                if (inPos + 2 >= inputSize) {
-                    return false;
-                }
-                uint8_t a = input[inPos + 1];
-                uint8_t b = input[inPos + 2];
+                outPos += copyLen;
+            } else if (control1 <= 0xBF) {
+                if (inPos + 1 >= static_cast<int>(inputSize)) return false;
+                int control2 = input[inPos++] & 0xFF;
+                int control3 = input[inPos++] & 0xFF;
 
-                size_t literalLen = (a >> 6) & 0x03;
-                if (inPos + 3 + literalLen > inputSize) {
+                int literalLen = (control2 >> 6) & 0x03;
+                if (inPos + literalLen > static_cast<int>(inputSize) || outPos + literalLen > static_cast<int>(outputSize)) {
                     return false;
                 }
-                if (outPos + literalLen > outputSize) {
-                    return false;
-                }
-                std::memcpy(output + outPos, input + inPos + 3, literalLen);
+                CopyLiteral(input + inPos, output + outPos, literalLen);
                 outPos += literalLen;
-                inPos += literalLen + 3;
+                inPos += literalLen;
 
-                size_t copyLen = (packcode & 0x3F) + 4;
-                size_t offset = (static_cast<size_t>(a & 0x3F) << 8) + b + 1;
-                if (!CopyFromHistory(output, outPos, outputSize, offset, copyLen)) {
+                int offset = ((control2 & 0x3F) << 8) + control3 + 1;
+                int copyLen = (control1 & 0x3F) + 4;
+                if (outPos + copyLen > static_cast<int>(outputSize) || !OffsetCopy(output, outPos, offset, copyLen)) {
                     return false;
                 }
-            }
-            else if ((packcode & 0x20) == 0) {
-                if (inPos + 3 >= inputSize) {
-                    return false;
-                }
-                uint8_t a = input[inPos + 1];
-                uint8_t b = input[inPos + 2];
-                uint8_t c = input[inPos + 3];
+                outPos += copyLen;
+            } else if (control1 <= 0xDF) {
+                if (inPos + 2 >= static_cast<int>(inputSize)) return false;
+                int control2 = input[inPos++] & 0xFF;
+                int control3 = input[inPos++] & 0xFF;
+                int control4 = input[inPos++] & 0xFF;
 
-                size_t literalLen = packcode & 0x03;
-                if (inPos + 4 + literalLen > inputSize) {
+                int literalLen = control1 & 0x03;
+                if (inPos + literalLen > static_cast<int>(inputSize) || outPos + literalLen > static_cast<int>(outputSize)) {
                     return false;
                 }
-                if (outPos + literalLen > outputSize) {
-                    return false;
-                }
-                std::memcpy(output + outPos, input + inPos + 4, literalLen);
+                CopyLiteral(input + inPos, output + outPos, literalLen);
                 outPos += literalLen;
-                inPos += literalLen + 4;
+                inPos += literalLen;
 
-                size_t copyLen = (static_cast<size_t>((packcode >> 2) & 0x03) << 8) + c + 5;
-                size_t offset = (static_cast<size_t>(packcode & 0x10) << 12) +
-                    (static_cast<size_t>(a) << 8) + b + 1;
-                if (!CopyFromHistory(output, outPos, outputSize, offset, copyLen)) {
+                int offset = ((control1 & 0x10) << 12) + (control2 << 8) + control3 + 1;
+                int copyLen = ((control1 & 0x0C) << 6) + control4 + 5;
+                if (outPos + copyLen > static_cast<int>(outputSize) || !OffsetCopy(output, outPos, offset, copyLen)) {
                     return false;
                 }
-            }
-            else {
-                size_t literalLen = ((packcode & 0x1F) << 2) + 4;
-                if (inPos + 1 + literalLen > inputSize) {
+                outPos += copyLen;
+            } else if (control1 <= 0xFB) {
+                int literalLen = ((control1 & 0x1F) << 2) + 4;
+                if (inPos + literalLen > static_cast<int>(inputSize) || outPos + literalLen > static_cast<int>(outputSize)) {
                     return false;
                 }
-                if (outPos + literalLen > outputSize) {
-                    return false;
-                }
-                std::memcpy(output + outPos, input + inPos + 1, literalLen);
+                CopyLiteral(input + inPos, output + outPos, literalLen);
                 outPos += literalLen;
-                inPos += literalLen + 1;
+                inPos += literalLen;
+            } else {
+                int literalLen = control1 & 0x03;
+                if (inPos + literalLen > static_cast<int>(inputSize) || outPos + literalLen > static_cast<int>(outputSize)) {
+                    return false;
+                }
+                CopyLiteral(input + inPos, output + outPos, literalLen);
+                outPos += literalLen;
+                inPos += literalLen;
+                break;
             }
         }
 
-        if (inPos >= inputSize) {
-            return false;
-        }
-
-        if (outPos < outputSize) {
-            size_t literalLen = input[inPos] & 0x03;
-            if (inPos + 1 + literalLen > inputSize) {
-                return false;
-            }
-            if (outPos + literalLen > outputSize) {
-                return false;
-            }
-            std::memcpy(output + outPos, input + inPos + 1, literalLen);
-            outPos += literalLen;
-            inPos += literalLen + 1;
-        }
-
-        return outPos == outputSize;
+        return static_cast<size_t>(outPos) == outputSize;
     }
 
 } // namespace QFS

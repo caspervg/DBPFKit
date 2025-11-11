@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <print>
 
 #include "QFSDecompressor.h"
 
@@ -71,23 +72,95 @@ namespace DBPF {
         return true;
     }
 
+    bool IsChunkHeader(const uint8_t* data, size_t size,
+                       uint32_t& chunkHeaderSize, uint32_t& chunkBodySize) {
+        if (size < 9) {
+            return false;
+        }
+        uint32_t chunkSize = ReadUInt32LE(data);
+        uint32_t uncompressed = ReadUInt32LE(data + 4);
+        size_t flagOffset = 8;
+        uint8_t code = data[flagOffset];
+        if ((code != 0x10 && code != 0x11) && size >= 11) {
+            flagOffset = 10;
+            code = data[flagOffset];
+        }
+
+        if (code == 0x10 && chunkSize > 0 && flagOffset + 1 + chunkSize <= size) {
+            chunkHeaderSize = static_cast<uint32_t>(flagOffset + 1);
+            chunkBodySize = chunkSize;
+            return true;
+        }
+        if (code == 0x11 && size >= flagOffset + 5) {
+            chunkHeaderSize = static_cast<uint32_t>(flagOffset + 5);
+            uint32_t body = ReadUInt32LE(data + flagOffset + 1);
+            if (body == 0 || chunkHeaderSize + body > size) {
+                return false;
+            }
+            chunkBodySize = body;
+            return true;
+        }
+
+        (void)uncompressed;
+        return false;
+    }
+
+    bool AlignToQfsSignature(const uint8_t*& dataStart, size_t& dataSize) {
+        for (size_t i = 0; i + 1 < dataSize && i < 16; ++i) {
+            uint16_t candidate = static_cast<uint16_t>(static_cast<uint16_t>(dataStart[i]) << 8) |
+                                 static_cast<uint16_t>(dataStart[i + 1]);
+            if (candidate == QFS::MAGIC_COMPRESSED) {
+                if (i > 0) {
+                    dataStart += i;
+                    dataSize -= i;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const IndexEntry& entry) const {
         const auto start = static_cast<size_t>(entry.offset);
         const auto length = static_cast<size_t>(entry.size);
         if (mFileBuffer.empty() || start + length > mFileBuffer.size()) {
+            std::println("[DBPF] Invalid bounds for entry {} (offset {}, size {})",
+                         entry.tgi.ToString(), entry.offset, entry.size);
             return std::nullopt;
         }
 
-        std::vector<uint8_t> data(length);
-        std::memcpy(data.data(), mFileBuffer.data() + start, length);
+        const uint8_t* dataStart = mFileBuffer.data() + start;
+        size_t dataSize = length;
+
+        uint32_t chunkHeaderSize = 0;
+        uint32_t chunkBodySize = 0;
+        if (IsChunkHeader(dataStart, dataSize, chunkHeaderSize, chunkBodySize)) {
+            std::println("[DBPF] Entry {} uses chunk header ({} bytes) body size {}",
+                         entry.tgi.ToString(), chunkHeaderSize, chunkBodySize);
+            dataStart += chunkHeaderSize;
+            dataSize = chunkBodySize;
+        }
+
+        bool aligned = AlignToQfsSignature(dataStart, dataSize);
+        if (aligned) {
+            std::println("[DBPF] Entry {} aligned to QFS signature at new size {}", entry.tgi.ToString(), dataSize);
+        }
+
+        std::vector<uint8_t> data(dataStart, dataStart + dataSize);
 
         if (QFS::Decompressor::IsQFSCompressed(data.data(), data.size())) {
+            std::println("[DBPF] Decompressing entry {} ({} bytes)",
+                         entry.tgi.ToString(), data.size());
             std::vector<uint8_t> decompressed;
             if (!QFS::Decompressor::Decompress(data.data(), data.size(), decompressed)) {
+                std::println("[DBPF] QFS decompression failed for {}", entry.tgi.ToString());
                 return std::nullopt;
             }
+            std::println("[DBPF] Entry {} decompressed to {} bytes",
+                         entry.tgi.ToString(), decompressed.size());
             return decompressed;
         }
+        std::println("[DBPF] Entry {} not compressed ({} bytes)", entry.tgi.ToString(), data.size());
         return data;
     }
 

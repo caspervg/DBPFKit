@@ -2,9 +2,11 @@
 
 This repository contains a collection of reusable helpers for reading SimCity 4 data formats in C++23. The main components today are:
 
-- `DBPFReader` / `DBPFTypes`: minimal DBPF archive support, ported from the `scdbpf` reference.
+- `DBPFReader` / `DBPFTypes`: minimal DBPF archive support, ported from the `scdbpf` reference. Handles chunked records, directory metadata, and exposes helper indexes for TGIs.
 - `QFSDecompressor`: a byte-for-byte decoder that follows wouanagaine’s SC4Mapper 2013 implementation.
 - `S3DReader`: a parser for the `3DMD` mesh format used by SimCity 4 models.
+- `FSHReader`: decodes SC4 texture containers (SHPI/G26x) including DXT1/3/5 bitmaps and mipmaps via libsquish.
+- `Exemplar` helpers: binary exemplar/cohort parser with property introspection and the catalogued TGI labels from scdbpf.
 
 The sections below outline how to build the project and how to consume each API from your own tools.
 
@@ -94,6 +96,37 @@ API summary:
 - `Decompress(...)` validates the header, resizes the output vector to the advertised length, and decodes the packcode stream. It supports the optional “chunk flag” header variant and the literal terminator rules described on the SC4Devotion wiki.
 
 If you need more control (e.g., to stream into a preallocated buffer) you can call `DecompressInternal` directly, but the vector-based helper is usually sufficient.
+
+## FSH Reader
+
+**Headers:** `FSHReader.h`, `FSHStructures.h`
+
+```cpp
+#include "FSHReader.h"
+
+auto payload = reader.ReadEntryData(entry);                    // DBPF entry with type 0x7AB50E44
+FSH::File file;
+if (FSH::Reader::Parse(payload->data(), payload->size(), file)) {
+    for (const auto& tex : file.entries) {
+        for (const auto& mip : tex.bitmaps) {
+            std::vector<uint8_t> rgba;
+            if (FSH::Reader::ConvertToRGBA8(mip, rgba)) {
+                // rgba now contains width*height*4 bytes
+            }
+        }
+    }
+}
+```
+
+Highlights:
+
+- Supports SHPI/G26x/G35x headers, directory entries, labels/attachments, and the usual SimCity directory IDs (G264/GIMX/etc.).
+- Automatically QFS-decompresses records before parsing.
+- Handles both uncompressed formats (32-bit, 24-bit, 4444/565/1555) and DXT1/3/5 via libsquish. Each entry exposes all mip levels, not just the base texture.
+
+### Saving textures to disk (CLI helper)
+
+`src/main.cpp` contains a convenience path that scans a DAT, decodes the first few FSH entries, and writes them to `./fsh_output`. On Windows this uses WIC via `IWICBitmapEncoder`, so no extra libraries are required. Non-Windows builds skip the PNG export path (the decoder still works, but the sample app just logs a message).
 
 ## S3D Reader
 
@@ -206,6 +239,26 @@ From here you can extend the renderer with:
 2. Multiple LOD support: iterate through every vertex/index buffer pair in the S3D.
 3. Placement transforms sourced from exemplar entries (apply to `model.transform`).
 4. UI via ImGui to select TGIs, toggle wireframe, and inspect metadata.
+
+## Exemplar Parser
+
+**Headers:** `Exemplar.h`, `TGI.h`
+
+```cpp
+#include "Exemplar.h"
+
+auto payload = reader.ReadEntryData(entry);                // entry.tgi.type == 0x6534284A
+auto result = Exemplar::Parse(payload->data(), payload->size());
+if (result.success) {
+    const auto& exemplar = result.record;
+    std::println("Parent: {}", exemplar.parent.ToString());
+    for (const auto& prop : exemplar.properties) {
+        std::println("  {}", prop.ToString());
+    }
+}
+```
+
+The parser mirrors scdbpf’s implementation: it handles binary EQZB/CQZB headers, property IDs/types, lists vs. scalars, and exposes a human-friendly `Property::ToString()` (hex + decimal for numeric fields). Text exemplars (`EQZT/CQZT`) are rare and currently rejected—extend `PropertyParser` if you encounter them in the wild.
 
 ## Extending / Integrating
 

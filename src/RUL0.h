@@ -187,8 +187,7 @@ namespace IntersectionOrdering {
         Translation translate = Translation{};
         bool transpose = false;
 
-        // Return a human-readable summary of the piece
-        std::string ToString() const;
+        [[nodiscard]] std::string ToString() const;
     };
 
     struct Ordering {

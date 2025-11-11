@@ -3,6 +3,7 @@
 #include "RUL0.h"
 
 #include <format>
+#include <ranges>
 
 namespace IntersectionOrdering {
     int IniHandler(void* user, const char* section, const char* key, const char* value) {
@@ -91,7 +92,8 @@ namespace IntersectionOrdering {
             else if (keyStr == kCostsKey) {
                 if (valStr.size() > 0) {
                     piece->costs = std::stoi(value);
-                } else {
+                }
+                else {
                     piece->costs = 0;
                 }
             }
@@ -378,7 +380,8 @@ namespace IntersectionOrdering {
 
                     if (rotateConstraints) {
                         rotated[newIdx] = RotateConstraint(mapData[oldIdx]);
-                    } else {
+                    }
+                    else {
                         rotated[newIdx] = mapData[oldIdx];
                     }
                 }
@@ -490,11 +493,11 @@ namespace IntersectionOrdering {
             }
 
             if (maxCols > 0) {
-                const int rows = piece.cellLayout.size();
+                const auto rows = piece.cellLayout.size();
                 std::vector transposed(maxCols, std::string(rows, ' '));
 
-                for (int row = 0; row < rows; ++row) {
-                    for (size_t col = 0; col < piece.cellLayout[row].size(); ++col) {
+                for (auto row = 0; row < rows; ++row) {
+                    for (auto col = 0; col < piece.cellLayout[row].size(); ++col) {
                         transposed[col][row] = piece.cellLayout[row][col];
                     }
                 }
@@ -511,10 +514,10 @@ namespace IntersectionOrdering {
             }
 
             if (maxCols > 0) {
-                const int rows = piece.consLayout.size();
+                const auto rows = piece.consLayout.size();
                 std::vector transposed(maxCols, std::string(rows, ' '));
 
-                for (int row = 0; row < rows; ++row) {
+                for (auto row = 0; row < rows; ++row) {
                     for (size_t col = 0; col < piece.consLayout[row].size(); ++col) {
                         transposed[col][row] = piece.consLayout[row][col];
                     }
@@ -554,7 +557,7 @@ namespace IntersectionOrdering {
         std::vector<uint32_t> pieceIds;
         pieceIds.reserve(data.puzzlePieces.size());
 
-        for (const auto& [id, _] : data.puzzlePieces) {
+        for (const auto& id : data.puzzlePieces | std::views::keys) {
             pieceIds.push_back(id);
         }
 
@@ -608,20 +611,48 @@ namespace IntersectionOrdering {
                     for (const auto& net : ct.networks) {
                         result += " [";
                         switch (net.networkType) {
-                            case NetworkType::ROAD: result += "Road"; break;
-                            case NetworkType::RAIL: result += "Rail"; break;
-                            case NetworkType::HIGHWAY: result += "Highway"; break;
-                            case NetworkType::STREET: result += "Street"; break;
-                            case NetworkType::PIPE: result += "Pipe"; break;
-                            case NetworkType::POWERLINE: result += "Powerline"; break;
-                            case NetworkType::AVENUE: result += "Avenue"; break;
-                            case NetworkType::SUBWAY: result += "Subway"; break;
-                            case NetworkType::LIGHT_RAIL: result += "LightRail"; break;
-                            case NetworkType::MONORAIL: result += "Monorail"; break;
-                            case NetworkType::ONE_WAY_ROAD: result += "OneWayRoad"; break;
-                            case NetworkType::DIRT_ROAD: result += "DirtRoad"; break;
-                            case NetworkType::GROUND_HIGHWAY: result += "GroundHighway"; break;
-                            default: result += "Unknown"; break;
+                        case NetworkType::ROAD:
+                            result += "Road";
+                            break;
+                        case NetworkType::RAIL:
+                            result += "Rail";
+                            break;
+                        case NetworkType::HIGHWAY:
+                            result += "Highway";
+                            break;
+                        case NetworkType::STREET:
+                            result += "Street";
+                            break;
+                        case NetworkType::PIPE:
+                            result += "Pipe";
+                            break;
+                        case NetworkType::POWERLINE:
+                            result += "Powerline";
+                            break;
+                        case NetworkType::AVENUE:
+                            result += "Avenue";
+                            break;
+                        case NetworkType::SUBWAY:
+                            result += "Subway";
+                            break;
+                        case NetworkType::LIGHT_RAIL:
+                            result += "LightRail";
+                            break;
+                        case NetworkType::MONORAIL:
+                            result += "Monorail";
+                            break;
+                        case NetworkType::ONE_WAY_ROAD:
+                            result += "OneWayRoad";
+                            break;
+                        case NetworkType::DIRT_ROAD:
+                            result += "DirtRoad";
+                            break;
+                        case NetworkType::GROUND_HIGHWAY:
+                            result += "GroundHighway";
+                            break;
+                        default:
+                            result += "Unknown";
+                            break;
                         }
                         result += "]";
                     }
@@ -632,7 +663,7 @@ namespace IntersectionOrdering {
         // Add preview effect information
         if (effect.initialized) {
             result += std::format("\n  Preview: pos({}, {}), rot={}°, flip={}",
-                                (int)effect.x, (int)effect.y, effect.rotation, effect.flip);
+                                  effect.x, effect.y, effect.rotation, effect.flip);
         }
 
         // Add base IDs if they're set

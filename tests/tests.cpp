@@ -12,6 +12,7 @@
 #include "Exemplar.h"
 #include "FSHReader.h"
 #include "QFSDecompressor.h"
+#include "squish/squish.h"
 
 namespace {
 
@@ -21,6 +22,13 @@ std::vector<uint8_t> SampleQfsPayload() {
         0xE0, 'S', 'C', '4', '!',     // literal control block
         0xFC, 0x00                    // terminator
     };
+}
+
+void WriteUInt32LE(std::vector<uint8_t>& buffer, size_t offset, uint32_t value) {
+    buffer[offset + 0] = static_cast<uint8_t>(value & 0xFF);
+    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+    buffer[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xFF);
+    buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFF);
 }
 
 std::vector<uint8_t> WrapChunked(const std::vector<uint8_t>& data, uint8_t flag) {
@@ -43,12 +51,6 @@ struct TestEntry {
     std::vector<uint8_t> data;
 };
 
-void WriteUInt32LE(std::vector<uint8_t>& buffer, size_t offset, uint32_t value) {
-    buffer[offset + 0] = static_cast<uint8_t>(value & 0xFF);
-    buffer[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
-    buffer[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xFF);
-    buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFF);
-}
 
 std::vector<uint8_t> BuildDbpf(const std::vector<TestEntry>& entries) {
     constexpr size_t kHeaderSize = 0x60;
@@ -175,9 +177,10 @@ std::vector<uint8_t> MakeStringProperty(uint32_t id, std::string_view value) {
 std::vector<uint8_t> BuildSimpleFsh() {
     const uint32_t headerSize = 16;
     const uint32_t directorySize = 8;
-    const uint32_t bitmapHeaderSize = 4 + 2 + 2 + 8;
+    const uint32_t entryHeaderSize = 1 + 3 + 12;
     const uint32_t pixelBytes = 4 * 4;
-    const uint32_t totalSize = headerSize + directorySize + bitmapHeaderSize + pixelBytes;
+    const uint32_t entrySize = entryHeaderSize + pixelBytes;
+    const uint32_t totalSize = headerSize + directorySize + entrySize;
 
     std::vector<uint8_t> buffer(totalSize, 0);
     WriteUInt32LE(buffer, 0, FSH::kMagicSHPI);
@@ -185,13 +188,27 @@ std::vector<uint8_t> BuildSimpleFsh() {
     WriteUInt32LE(buffer, 8, 1);
     WriteUInt32LE(buffer, 12, 0);
 
-    const uint32_t bitmapOffset = headerSize + directorySize;
+    const uint32_t entryOffset = headerSize + directorySize;
     WriteUInt32LE(buffer, 16, 0);
-    WriteUInt32LE(buffer, 20, bitmapOffset);
+    WriteUInt32LE(buffer, 20, entryOffset);
 
-    WriteUInt32LE(buffer, bitmapOffset, 0x0000007D);
-    buffer[bitmapOffset + 4] = 2;
-    buffer[bitmapOffset + 6] = 2;
+    size_t cursor = entryOffset;
+    buffer[cursor++] = FSH::kCode32Bit;
+    buffer[cursor++] = 0;
+    buffer[cursor++] = 0;
+    buffer[cursor++] = 0;
+
+    auto push16 = [&](uint16_t value) {
+        buffer[cursor++] = static_cast<uint8_t>(value & 0xFF);
+        buffer[cursor++] = static_cast<uint8_t>((value >> 8) & 0xFF);
+    };
+
+    push16(2);
+    push16(2);
+    push16(0);
+    push16(0);
+    push16(0);
+    push16(0);
 
     const std::array<uint8_t, 16> pixels{
         0x00, 0x00, 0xFF, 0xFF,
@@ -199,7 +216,60 @@ std::vector<uint8_t> BuildSimpleFsh() {
         0xFF, 0x00, 0x00, 0xFF,
         0xFF, 0xFF, 0xFF, 0xFF
     };
-    std::copy(pixels.begin(), pixels.end(), buffer.begin() + bitmapOffset + bitmapHeaderSize);
+    std::copy(pixels.begin(), pixels.end(), buffer.begin() + cursor);
+    return buffer;
+}
+
+std::vector<uint8_t> BuildDxtFsh(std::vector<uint8_t>& blocks, int& widthOut, int& heightOut) {
+    const int width = 4;
+    const int height = 4;
+    widthOut = width;
+    heightOut = height;
+    std::array<uint8_t, width * height * 4> source{
+        255,   0,   0, 255,   0, 255,   0, 255,
+          0,   0, 255, 255, 255, 255, 255, 255,
+        255, 255,   0, 255,   0, 255, 255, 255,
+        255,   0, 255, 255,   0,   0,   0, 255
+    };
+
+    blocks.resize(GetStorageRequirements(width, height, squish::kDxt1));
+    squish::CompressImage(source.data(), width, height, blocks.data(), squish::kDxt1);
+
+    const uint32_t headerSize = 16;
+    const uint32_t directorySize = 8;
+    const uint32_t entryHeaderSize = 1 + 3 + 12;
+    const uint32_t entrySize = entryHeaderSize + static_cast<uint32_t>(blocks.size());
+    const uint32_t totalSize = headerSize + directorySize + entrySize;
+
+    std::vector<uint8_t> buffer(totalSize, 0);
+    WriteUInt32LE(buffer, 0, FSH::kMagicSHPI);
+    WriteUInt32LE(buffer, 4, totalSize);
+    WriteUInt32LE(buffer, 8, 1);
+    WriteUInt32LE(buffer, 12, 0);
+
+    const uint32_t entryOffset = headerSize + directorySize;
+    WriteUInt32LE(buffer, 16, 0);
+    WriteUInt32LE(buffer, 20, entryOffset);
+
+    size_t cursor = entryOffset;
+    buffer[cursor++] = FSH::kCodeDXT1;
+    buffer[cursor++] = 0;
+    buffer[cursor++] = 0;
+    buffer[cursor++] = 0;
+
+    auto push16 = [&](uint16_t value) {
+        buffer[cursor++] = static_cast<uint8_t>(value & 0xFF);
+        buffer[cursor++] = static_cast<uint8_t>((value >> 8) & 0xFF);
+    };
+
+    push16(width);
+    push16(height);
+    push16(0);
+    push16(0);
+    push16(0);
+    push16(0);
+
+    std::copy(blocks.begin(), blocks.end(), buffer.begin() + cursor);
     return buffer;
 }
 
@@ -340,8 +410,9 @@ TEST_CASE("FSH reader parses simple uncompressed bitmap") {
     auto buffer = BuildSimpleFsh();
     FSH::File file;
     REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
-    REQUIRE(file.bitmaps.size() == 1);
-    const auto& bmp = file.bitmaps[0];
+    REQUIRE(file.entries.size() == 1);
+    REQUIRE(file.entries[0].bitmaps.size() == 1);
+    const auto& bmp = file.entries[0].bitmaps[0];
     CHECK(bmp.code == FSH::kCode32Bit);
     CHECK(bmp.width == 2);
     CHECK(bmp.height == 2);
@@ -353,10 +424,29 @@ TEST_CASE("FSH reader converts 32-bit bitmap to RGBA8") {
     FSH::File file;
     REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
     std::vector<uint8_t> rgba;
-    REQUIRE(FSH::Reader::ConvertToRGBA8(file.bitmaps[0], rgba));
+    REQUIRE(file.entries.size() == 1);
+    REQUIRE(file.entries[0].bitmaps.size() == 1);
+    REQUIRE(FSH::Reader::ConvertToRGBA8(file.entries[0].bitmaps[0], rgba));
     REQUIRE(rgba.size() == 16);
     CHECK(rgba[0] == 0xFF);
     CHECK(rgba[1] == 0x00);
     CHECK(rgba[2] == 0x00);
     CHECK(rgba[3] == 0xFF);
+}
+
+TEST_CASE("FSH reader decodes DXT1 bitmap") {
+    std::vector<uint8_t> blocks;
+    int width = 0;
+    int height = 0;
+    auto buffer = BuildDxtFsh(blocks, width, height);
+    FSH::File file;
+    REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
+    REQUIRE(file.entries.size() == 1);
+    REQUIRE_FALSE(file.entries[0].bitmaps.empty());
+    const auto& bmp = file.entries[0].bitmaps[0];
+    std::vector<uint8_t> rgba;
+    REQUIRE(FSH::Reader::ConvertToRGBA8(bmp, rgba));
+    std::vector<uint8_t> expected(width * height * 4);
+    squish::DecompressImage(expected.data(), width, height, blocks.data(), squish::kDxt1);
+    REQUIRE(rgba == expected);
 }

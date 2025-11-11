@@ -13,6 +13,7 @@ constexpr uint32_t kMagicG354 = 0x34353347; // 'G354'
 
 constexpr uint8_t kCodeDXT1 = 0x60;
 constexpr uint8_t kCodeDXT3 = 0x61;
+constexpr uint8_t kCodeDXT5 = 0x62;
 constexpr uint8_t kCode32Bit = 0x7D;
 constexpr uint8_t kCode24Bit = 0x7F;
 constexpr uint8_t kCode4444 = 0x6D;
@@ -40,9 +41,10 @@ struct Bitmap {
     uint8_t code = 0;
     uint16_t width = 0;
     uint16_t height = 0;
+    uint8_t mipLevel = 0;
     std::vector<uint8_t> data;
 
-    [[nodiscard]] bool IsDXT() const { return code == kCodeDXT1 || code == kCodeDXT3; }
+    [[nodiscard]] bool IsDXT() const { return code == kCodeDXT1 || code == kCodeDXT3 || code == kCodeDXT5; }
 
     [[nodiscard]] size_t BytesPerPixel() const {
         switch (code) {
@@ -57,18 +59,32 @@ struct Bitmap {
 
     [[nodiscard]] size_t ExpectedDataSize() const {
         if (code == kCodeDXT1) {
-            return ((width + 3) / 4) * ((height + 3) / 4) * 8;
+            const uint32_t blocksWide = std::max<uint32_t>(1, (width + 3) / 4);
+            const uint32_t blocksHigh = std::max<uint32_t>(1, (height + 3) / 4);
+            return blocksWide * blocksHigh * 8;
         }
         if (code == kCodeDXT3) {
-            return ((width + 3) / 4) * ((height + 3) / 4) * 16;
+            const uint32_t blocksWide = std::max<uint32_t>(1, (width + 3) / 4);
+            const uint32_t blocksHigh = std::max<uint32_t>(1, (height + 3) / 4);
+            return blocksWide * blocksHigh * 16;
         }
         return static_cast<size_t>(width) * static_cast<size_t>(height) * BytesPerPixel();
     }
 };
 
+struct Entry {
+    std::string name;
+    uint8_t formatCode = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    uint8_t mipCount = 0;
+    std::string label;
+    std::vector<Bitmap> bitmaps;
+};
+
 struct File {
     FileHeader header;
-    std::vector<Bitmap> bitmaps;
+    std::vector<Entry> entries;
 };
 
 } // namespace FSH

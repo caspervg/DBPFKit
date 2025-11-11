@@ -34,8 +34,6 @@ private:
         return true;
     }
 
-    static bool ParseBitmap(const uint8_t*& ptr, const uint8_t* end, Bitmap& outBitmap);
-
     static void ARGB4444ToRGBA8(uint16_t color, uint8_t* rgba);
     static void RGB565ToRGBA8(uint16_t color, uint8_t* rgba);
     static void ARGB1555ToRGBA8(uint16_t color, uint8_t* rgba);

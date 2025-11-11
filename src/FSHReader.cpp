@@ -1,8 +1,34 @@
 #include "FSHReader.h"
 
 #include <algorithm>
+#include <string>
+#include <squish/squish.h>
 
 #include "QFSDecompressor.h"
+
+namespace {
+
+bool ReadUInt24(const uint8_t*& ptr, const uint8_t* end, uint32_t& out) {
+    if (ptr + 3 > end) {
+        return false;
+    }
+    out = (static_cast<uint32_t>(ptr[0]) << 16) |
+          (static_cast<uint32_t>(ptr[1]) << 8) |
+          static_cast<uint32_t>(ptr[2]);
+    ptr += 3;
+    return true;
+}
+
+std::string MakeName(const char name[4]) {
+    std::string s(name, name + 4);
+    auto nullPos = s.find('\0');
+    if (nullPos != std::string::npos) {
+        s.resize(nullPos);
+    }
+    return s;
+}
+
+} // namespace
 
 namespace FSH {
 
@@ -35,62 +61,98 @@ bool Reader::Parse(const uint8_t* data, size_t size, File& outFile) {
         return false;
     }
 
-    std::vector<DirectoryEntry> directory(outFile.header.numEntries);
+    struct DirEntryParsed {
+        std::string name;
+        uint32_t offset;
+    };
+
+    std::vector<DirEntryParsed> directory(outFile.header.numEntries);
     for (uint32_t i = 0; i < outFile.header.numEntries; ++i) {
-        if (!ReadBytes(ptr, end, directory[i].name, sizeof(directory[i].name))) return false;
-        if (!ReadValue(ptr, end, directory[i].offset)) return false;
+        DirectoryEntry dir{};
+        if (!ReadBytes(ptr, end, dir.name, sizeof(dir.name))) return false;
+        if (!ReadValue(ptr, end, dir.offset)) return false;
+        directory[i].name = MakeName(dir.name);
+        directory[i].offset = dir.offset;
     }
 
-    outFile.bitmaps.clear();
-    outFile.bitmaps.reserve(outFile.header.numEntries);
+    outFile.entries.clear();
+    outFile.entries.reserve(outFile.header.numEntries);
 
-    for (const auto& entry : directory) {
-        if (entry.offset >= fileSize) {
+    for (uint32_t i = 0; i < outFile.header.numEntries; ++i) {
+        const uint32_t offset = directory[i].offset;
+        const uint32_t nextOffset = (i + 1 < directory.size())
+                                        ? directory[i + 1].offset
+                                        : static_cast<uint32_t>(fileSize);
+        if (offset >= fileSize || offset >= nextOffset) {
             return false;
         }
-        const uint8_t* bitmapPtr = filePtr + entry.offset;
-        const uint8_t* bitmapEnd = filePtr + fileSize;
-        Bitmap bitmap;
-        if (!ParseBitmap(bitmapPtr, bitmapEnd, bitmap)) {
-            return false;
+
+        const uint8_t* entryPtr = filePtr + offset;
+        const uint8_t* entryEnd = filePtr + nextOffset;
+
+        Entry entry{};
+        entry.name = directory[i].name;
+
+        uint8_t record = 0;
+        if (!ReadBytes(entryPtr, entryEnd, &record, 1)) return false;
+        uint32_t blockSize = 0;
+        if (!ReadUInt24(entryPtr, entryEnd, blockSize)) return false;
+
+        uint16_t width = 0, height = 0;
+        uint16_t xCenter = 0, yCenter = 0;
+        uint16_t xOffset = 0, yOffset = 0;
+        if (!ReadValue(entryPtr, entryEnd, width)) return false;
+        if (!ReadValue(entryPtr, entryEnd, height)) return false;
+        if (!ReadValue(entryPtr, entryEnd, xCenter)) return false;
+        if (!ReadValue(entryPtr, entryEnd, yCenter)) return false;
+        if (!ReadValue(entryPtr, entryEnd, xOffset)) return false;
+        if (!ReadValue(entryPtr, entryEnd, yOffset)) return false;
+
+        entry.formatCode = record & 0x7F;
+        entry.width = width;
+        entry.height = height;
+        entry.mipCount = static_cast<uint8_t>((yOffset >> 12) & 0x0F);
+
+        uint8_t* imageDataStart = const_cast<uint8_t*>(entryPtr);
+
+        for (uint8_t mip = 0; mip <= entry.mipCount; ++mip) {
+            uint16_t mipWidth = static_cast<uint16_t>(std::max<int>(1, width >> mip));
+            uint16_t mipHeight = static_cast<uint16_t>(std::max<int>(1, height >> mip));
+            if ((entry.formatCode == kCodeDXT1 || entry.formatCode == kCodeDXT3) &&
+                (mipWidth % 4 != 0 || mipHeight % 4 != 0)) {
+                break;
+            }
+            Bitmap bitmap;
+            bitmap.code = entry.formatCode;
+            bitmap.width = mipWidth;
+            bitmap.height = mipHeight;
+            bitmap.mipLevel = mip;
+            const size_t dataSize = bitmap.ExpectedDataSize();
+            if (entryPtr + dataSize > entryEnd) {
+                return false;
+            }
+            bitmap.data.assign(entryPtr, entryPtr + dataSize);
+            entryPtr += dataSize;
+            entry.bitmaps.push_back(std::move(bitmap));
         }
-        outFile.bitmaps.push_back(std::move(bitmap));
+
+        if (blockSize != 0) {
+            const uint32_t attachmentOffset = offset + blockSize;
+            if (attachmentOffset + 4 < nextOffset) {
+                const uint8_t* attachment = filePtr + attachmentOffset;
+                if (attachment[0] == 0x70) {
+                    const char* labelStart = reinterpret_cast<const char*>(attachment + 4);
+                    const char* labelEnd = reinterpret_cast<const char*>(filePtr + nextOffset);
+                    const char* terminator = std::find(labelStart, labelEnd, '\0');
+                    entry.label.assign(labelStart, terminator);
+                }
+            }
+        }
+
+        outFile.entries.push_back(std::move(entry));
     }
 
     return true;
-}
-
-bool Reader::ParseBitmap(const uint8_t*& ptr, const uint8_t* end, Bitmap& outBitmap) {
-    uint32_t code = 0;
-    uint16_t width = 0;
-    uint16_t height = 0;
-    uint16_t misc[4] = {};
-
-    if (!ReadValue(ptr, end, code)) return false;
-    if (!ReadValue(ptr, end, width)) return false;
-    if (!ReadValue(ptr, end, height)) return false;
-    for (uint16_t& value : misc) {
-        if (!ReadValue(ptr, end, value)) return false;
-    }
-
-    outBitmap.code = static_cast<uint8_t>(code & 0x7F);
-    outBitmap.width = width;
-    outBitmap.height = height;
-
-    const size_t expected = outBitmap.ExpectedDataSize();
-    if (expected == 0) {
-        return false;
-    }
-
-    const size_t remaining = static_cast<size_t>(end - ptr);
-    const size_t dataSize = std::min(expected, remaining);
-
-    outBitmap.data.resize(dataSize);
-    if (!ReadBytes(ptr, end, outBitmap.data.data(), dataSize)) {
-        return false;
-    }
-
-    return dataSize == expected;
 }
 
 bool Reader::ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA) {
@@ -100,6 +162,12 @@ bool Reader::ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA)
 
     const size_t pixelCount = static_cast<size_t>(bitmap.width) * static_cast<size_t>(bitmap.height);
     outRGBA.assign(pixelCount * 4, 0);
+
+    if (bitmap.IsDXT()) {
+        if (bitmap.width % 4 != 0 || bitmap.height % 4 != 0) {
+            return false;
+        }
+    }
 
     switch (bitmap.code) {
         case kCode32Bit: {
@@ -138,7 +206,7 @@ bool Reader::ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA)
                 uint16_t color;
                 std::memcpy(&color, src, sizeof(uint16_t));
                 src += sizeof(uint16_t);
-                ARGB4444ToRGBA8(color, dst);
+                Reader::ARGB4444ToRGBA8(color, dst);
                 dst += 4;
             }
             return true;
@@ -150,7 +218,7 @@ bool Reader::ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA)
                 uint16_t color;
                 std::memcpy(&color, src, sizeof(uint16_t));
                 src += sizeof(uint16_t);
-                RGB565ToRGBA8(color, dst);
+                Reader::RGB565ToRGBA8(color, dst);
                 dst += 4;
             }
             return true;
@@ -162,9 +230,25 @@ bool Reader::ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA)
                 uint16_t color;
                 std::memcpy(&color, src, sizeof(uint16_t));
                 src += sizeof(uint16_t);
-                ARGB1555ToRGBA8(color, dst);
+                Reader::ARGB1555ToRGBA8(color, dst);
                 dst += 4;
             }
+            return true;
+        }
+        case kCodeDXT1:
+        case kCodeDXT3:
+        case kCodeDXT5: {
+            int squishFlags = squish::kDxt1;
+            if (bitmap.code == kCodeDXT3) {
+                squishFlags = squish::kDxt3;
+            } else if (bitmap.code == kCodeDXT5) {
+                squishFlags = squish::kDxt5;
+            }
+            squish::DecompressImage(outRGBA.data(),
+                                    static_cast<int>(bitmap.width),
+                                    static_cast<int>(bitmap.height),
+                                    bitmap.data.data(),
+                                    squishFlags);
             return true;
         }
         default:

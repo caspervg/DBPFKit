@@ -7,6 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Raylib + ImGui dependencies for GUI target
 include(FetchContent)
 
+FetchContent_Declare(
+        libsquish
+        GIT_REPOSITORY https://github.com/oblivioncth/libsquish.git
+        GIT_TAG v1.15.1.3
+)
+FetchContent_MakeAvailable(libsquish)
+
 find_package(raylib QUIET)
 if (NOT raylib_FOUND)
     FetchContent_Declare(
@@ -63,6 +70,7 @@ target_include_directories(SC4RULParserLib PUBLIC
     src
     vendor/inih
 )
+target_link_libraries(SC4RULParserLib PRIVATE libsquish::Squish)
 
 # Main executable (if you have a main.cpp later)
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
@@ -81,6 +89,7 @@ add_executable(SC4RULParserTests
 )
 target_link_libraries(SC4RULParserTests PRIVATE
     SC4RULParserLib
+    libsquish::Squish
     Catch2::Catch2WithMain
 )
 

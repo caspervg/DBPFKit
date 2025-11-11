@@ -1,0 +1,214 @@
+# SC4 RUL Parser Support Libraries
+
+This repository contains a collection of reusable helpers for reading SimCity 4 data formats in C++23. The main components today are:
+
+- `DBPFReader` / `DBPFTypes`: minimal DBPF archive support, ported from the `scdbpf` reference.
+- `QFSDecompressor`: a byte-for-byte decoder that follows wouanagaine’s SC4Mapper 2013 implementation.
+- `S3DReader`: a parser for the `3DMD` mesh format used by SimCity 4 models.
+
+The sections below outline how to build the project and how to consume each API from your own tools.
+
+## Building & Tests
+
+```bash
+cmake -S . -B cmake-build-debug
+cmake --build cmake-build-debug --target SC4RULParserTests
+ctest --test-dir cmake-build-debug --output-on-failure
+```
+
+The `SC4RULParserLib` static library exposes the public headers under `src/`. Include the directory when adding the target to another project:
+
+```cmake
+add_subdirectory(path/to/sc4-rul-parser)
+target_link_libraries(my_tool PRIVATE SC4RULParserLib)
+target_include_directories(my_tool PRIVATE path/to/sc4-rul-parser/src)
+```
+
+## DBPF Reader & Types
+
+**Key headers:** `DBPFReader.h`, `DBPFTypes.h`
+
+```cpp
+#include "DBPFReader.h"
+
+DBPF::Reader reader;
+if (!reader.LoadFile("examples/dat/SM2 Mega Prop Pack Vol1.dat")) {
+    throw std::runtime_error("failed to load DAT");
+}
+
+for (const auto& entry : reader.GetIndex()) {
+    auto payload = reader.ReadEntryData(entry);
+    if (!payload) {
+        continue; // skip truncated entries
+    }
+    // entry.tgi gives type/group/instance
+    // payload->data() contains either raw or auto-decompressed bytes
+}
+```
+
+Usage notes:
+
+- `LoadFile(path)` maps the entire DAT into memory and verifies the 0x60-byte header (version `1.0`, index type `7`).
+- `LoadBuffer(data, size)` accepts an in-memory image (useful in tests).
+- `GetIndex()` returns the parsed index entries (`DBPF::IndexEntry`), each with a `Tgi`, file offset, size, and optional `decompressedSize`.
+- `ReadEntryData(entry)` copies the referenced bytes and automatically runs them through the QFS decompressor when needed. If you need raw bytes, test `QFS::Decompressor::IsQFSCompressed` yourself before calling `Decompress`.
+- Directory metadata is applied automatically when an entry with `DBPF::kDirectoryTgi` exists; the `decompressedSize` field is filled for matching entries.
+
+### TGI helpers & labeling
+
+If you need friendlier names or quick lookups for specific type/group/instance combos, the `TGI.h` helpers wrap everything in one place:
+
+```cpp
+#include "TGI.h"
+
+DBPF::Tgi tgi{0x5AD0E817, 0xBADB57F1, 0x00000000};
+
+std::string_view label = DBPF::Describe(tgi);          // => "S3D (Maxis)"
+auto mask = DBPF::MaskForLabel("Exemplar (T21)");      // optional TgiMask describing that family
+bool isExemplar = mask && mask->Matches(tgi);
+```
+
+- `Tgi` now exposes `ToString()` plus hashing/comparison helpers so you can drop it into `unordered_map` instances for fast T/G/I lookups.
+- `Describe(tgi)` consults a built-in catalog (ported from `scdbpf`) so you can present human-readable labels in UIs or logs.
+- `MaskForLabel(label)` retrieves the `TgiMask` used for that label, which is handy when filtering indexes (e.g., “find all entries whose type=FSH and group=0x0986135e”).
+
+These helpers are self-contained; add more catalog entries by editing `src/TGI.cpp`.
+
+## QFS Decompressor
+
+**Header:** `QFSDecompressor.h`
+
+```cpp
+#include "QFSDecompressor.h"
+
+std::vector<uint8_t> decompressed;
+if (QFS::Decompressor::Decompress(raw.data(), raw.size(), decompressed)) {
+    // decompressed now holds the inflated bytes
+}
+```
+
+API summary:
+
+- `IsQFSCompressed(const uint8_t*, size_t)` checks the 0x10FB signature and minimum header length.
+- `GetUncompressedSize(...)` returns the 24-bit size stored in the header (0 if not compressed).
+- `Decompress(...)` validates the header, resizes the output vector to the advertised length, and decodes the packcode stream. It supports the optional “chunk flag” header variant and the literal terminator rules described on the SC4Devotion wiki.
+
+If you need more control (e.g., to stream into a preallocated buffer) you can call `DecompressInternal` directly, but the vector-based helper is usually sufficient.
+
+## S3D Reader
+
+**Headers:** `S3DReader.h`, `S3DStructures.h`
+
+```cpp
+#include "S3DReader.h"
+
+std::vector<uint8_t> s3dData = /* load from DBPF entry */;
+S3D::Model model;
+if (!S3D::Reader::Parse(s3dData.data(), s3dData.size(), model)) {
+    throw std::runtime_error("invalid S3D");
+}
+
+for (const auto& vb : model.vertexBuffers) {
+    // vb.vertices, vb.bbMin/bbMax, etc.
+}
+```
+
+Highlights:
+
+- `Reader::Parse(const uint8_t*, size_t, Model&)` walks each chunk (`3DMD`, `HEAD`, `VERT`, `INDX`, `PRIM`, `MATS`, `ANIM`). The parser enforces the documented minor versions and vertex formats.
+- `Model` aggregates vertex buffers, index buffers, materials, animations, and bounding boxes. See `S3DStructures.h` for detailed field layouts.
+- The reader intentionally keeps parsing logic simple—no implicit OpenGL bindings or GPU resources—so you can adapt the in-memory model to whatever renderer or exporter you need.
+
+### Example: Rendering S3D via raylib
+
+The project already fetches raylib/imgui for the GUI target, so you can glue the readers together like this:
+
+```cpp
+#include <raylib.h>
+
+#include "DBPFReader.h"
+#include "S3DReader.h"
+
+std::optional<Mesh> BuildMesh(const S3D::Model& model) {
+    if (model.vertexBuffers.empty() || model.indexBuffers.empty()) return std::nullopt;
+    const auto& vb = model.vertexBuffers.front();
+    const auto& ib = model.indexBuffers.front();
+
+    Mesh mesh{};
+    mesh.vertexCount = static_cast<int>(vb.vertices.size());
+    mesh.triangleCount = static_cast<int>(ib.indices.size() / 3);
+    mesh.vertices = MemAlloc(sizeof(float) * 3 * mesh.vertexCount);
+    mesh.colors = MemAlloc(sizeof(unsigned char) * 4 * mesh.vertexCount);
+    mesh.texcoords = MemAlloc(sizeof(float) * 2 * mesh.vertexCount);
+    mesh.indices = MemAlloc(sizeof(unsigned short) * ib.indices.size());
+
+    for (int i = 0; i < mesh.vertexCount; ++i) {
+        const auto& v = vb.vertices[i];
+        float* pos = reinterpret_cast<float*>(mesh.vertices);
+        pos[3 * i + 0] = v.position.x;
+        pos[3 * i + 1] = v.position.y;
+        pos[3 * i + 2] = v.position.z;
+
+        auto* clr = reinterpret_cast<unsigned char*>(mesh.colors);
+        clr[4 * i + 0] = static_cast<unsigned char>(v.color.x * 255.0f);
+        clr[4 * i + 1] = static_cast<unsigned char>(v.color.y * 255.0f);
+        clr[4 * i + 2] = static_cast<unsigned char>(v.color.z * 255.0f);
+        clr[4 * i + 3] = static_cast<unsigned char>(v.color.w * 255.0f);
+
+        float* uv = reinterpret_cast<float*>(mesh.texcoords);
+        uv[2 * i + 0] = v.uv.x;
+        uv[2 * i + 1] = v.uv.y;
+    }
+
+    auto* idx = reinterpret_cast<unsigned short*>(mesh.indices);
+    for (size_t i = 0; i < ib.indices.size(); ++i) {
+        idx[i] = static_cast<unsigned short>(ib.indices[i]);
+    }
+
+    UploadMesh(&mesh, false);
+    return mesh;
+}
+
+int main() {
+    InitWindow(1280, 720, "S3D viewer");
+    Camera3D cam{ {5, 5, 5}, {0, 0, 0}, {0, 1, 0}, 45.0f, CAMERA_PERSPECTIVE };
+
+    DBPF::Reader dbpf;
+    dbpf.LoadFile("examples/dat/SM2 Mega Prop Pack Vol1.dat");
+    const auto& entry = dbpf.GetIndex().front(); // pick your S3D entry
+    auto bytes = dbpf.ReadEntryData(entry);
+
+    S3D::Model model;
+    S3D::Reader::Parse(bytes->data(), bytes->size(), model);
+
+    auto mesh = BuildMesh(model);
+    Model rayModel = LoadModelFromMesh(*mesh);
+
+    while (!WindowShouldClose()) {
+        UpdateCamera(&cam, CAMERA_ORBITAL);
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+        BeginMode3D(cam);
+        DrawGrid(20, 1.0f);
+        DrawModel(rayModel, Vector3Zero(), 1.0f, WHITE);
+        EndMode3D();
+        EndDrawing();
+    }
+
+    UnloadModel(rayModel);
+    CloseWindow();
+}
+```
+
+From here you can extend the renderer with:
+
+1. Texture lookups (decode the referenced FSH/PNG entries and assign them to `model.materials[i].maps[MATERIAL_MAP_DIFFUSE]`).
+2. Multiple LOD support: iterate through every vertex/index buffer pair in the S3D.
+3. Placement transforms sourced from exemplar entries (apply to `model.transform`).
+4. UI via ImGui to select TGIs, toggle wireframe, and inspect metadata.
+
+## Extending / Integrating
+
+- Add new tests by extending `tests/tests.cpp`; the file already includes helpers for constructing synthetic DBPF archives and verifying QFS + S3D flows.
+- When adding new parsing features, keep sample fixtures under `examples/` and mention them in the README so they can be re-used for manual verification.
+- Follow the formatting and naming conventions noted in `AGENTS.md` to stay consistent with the rest of the codebase.

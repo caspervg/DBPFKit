@@ -57,6 +57,26 @@ Usage notes:
 - `ReadEntryData(entry)` copies the referenced bytes and automatically runs them through the QFS decompressor when needed. If you need raw bytes, test `QFS::Decompressor::IsQFSCompressed` yourself before calling `Decompress`.
 - Directory metadata is applied automatically when an entry with `DBPF::kDirectoryTgi` exists; the `decompressedSize` field is filled for matching entries.
 
+### Convenience lookups
+
+`DBPF::Reader` exposes helpers that sit on top of the catalog in `TGI.cpp`, so you can map straight from human-friendly labels to entries:
+
+```cpp
+DBPF::TgiMask fshMask;
+fshMask.type = 0x7AB50E44; // any FSH
+
+for (const DBPF::IndexEntry* entry : reader.FindEntries(fshMask)) {
+    auto bytes = reader.ReadEntryData(*entry);
+    // ...
+}
+
+auto overlayTextures = reader.FindEntries("FSH (Base/Overlay Texture)");
+auto firstExemplar = reader.ReadFirstMatching("Exemplar");
+auto exact = reader.ReadEntryData(DBPF::Tgi{0x6534284A, 0x2821ED93, 0x12345678});
+```
+
+Use whichever path matches your workflow: exact TGIs, `TgiMask` filters, or the catalog strings shown by `DBPF::Describe`.
+
 ### TGI helpers & labeling
 
 If you need friendlier names or quick lookups for specific type/group/instance combos, the `TGI.h` helpers wrap everything in one place:

@@ -63,8 +63,8 @@ namespace DBPF {
         if (size < 9) {
             return false;
         }
-        uint32_t chunkSize = ReadUInt32LE(data);
-        uint32_t uncompressed = ReadUInt32LE(data + 4);
+        const uint32_t chunkSize = ReadUInt32LE(data);
+        const uint32_t uncompressed = ReadUInt32LE(data + 4);
         size_t flagOffset = 8;
         uint8_t code = data[flagOffset];
         if ((code != 0x10 && code != 0x11) && size >= 11) {
@@ -73,12 +73,12 @@ namespace DBPF {
         }
 
         if (code == 0x10 && chunkSize > 0 && flagOffset + 1 + chunkSize <= size) {
-            chunkHeaderSize = static_cast<uint32_t>(flagOffset + 1);
+            chunkHeaderSize = flagOffset + 1;
             chunkBodySize = chunkSize;
             return true;
         }
         if (code == 0x11 && size >= flagOffset + 5) {
-            chunkHeaderSize = static_cast<uint32_t>(flagOffset + 5);
+            chunkHeaderSize = flagOffset + 5;
             uint32_t body = ReadUInt32LE(data + flagOffset + 1);
             if (body == 0 || chunkHeaderSize + body > size) {
                 return false;
@@ -93,7 +93,7 @@ namespace DBPF {
 
     bool AlignToQfsSignature(const uint8_t*& dataStart, size_t& dataSize) {
         for (size_t i = 0; i + 1 < dataSize && i < 16; ++i) {
-            uint16_t candidate = static_cast<uint16_t>(static_cast<uint16_t>(dataStart[i]) << 8) |
+            const uint16_t candidate = static_cast<uint16_t>(static_cast<uint16_t>(dataStart[i]) << 8) |
                 static_cast<uint16_t>(dataStart[i + 1]);
             if (candidate == QFS::MAGIC_COMPRESSED) {
                 if (i > 0) {
@@ -131,7 +131,7 @@ namespace DBPF {
             std::println("[DBPF] Entry {} aligned to QFS signature at new size {}", entry.tgi.ToString(), dataSize);
         }
 
-        std::vector<uint8_t> data(dataStart, dataStart + dataSize);
+        std::vector data(dataStart, dataStart + dataSize);
 
         std::span<const uint8_t> dataSpan(data.data(), data.size());
 
@@ -149,6 +149,84 @@ namespace DBPF {
         }
         std::println("[DBPF] Entry {} not compressed ({} bytes)", entry.tgi.ToString(), data.size());
         return data;
+    }
+
+    std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const Tgi& tgi) const {
+        const IndexEntry* entry = FindEntry(tgi);
+        if (!entry) {
+            return std::nullopt;
+        }
+        return ReadEntryData(*entry);
+    }
+
+    const IndexEntry* Reader::FindEntry(const Tgi& tgi) const {
+        const auto it = mTGIIndex.find(tgi);
+        if (it == mTGIIndex.end()) {
+            return nullptr;
+        }
+        return it->second;
+    }
+
+    std::vector<const IndexEntry*> Reader::FindEntries(const TgiMask& mask) const {
+        std::vector<const IndexEntry*> matches;
+        auto pushIfMatches = [&](const IndexEntry* entry) {
+            if (entry && mask.Matches(entry->tgi)) {
+                matches.push_back(entry);
+            }
+        };
+
+        if (mask.type.has_value()) {
+            const auto [begin, end] = mTypeIndex.equal_range(*mask.type);
+            for (auto it = begin; it != end; ++it) {
+                pushIfMatches(it->second);
+            }
+            return matches;
+        }
+
+        if (mask.group.has_value()) {
+            const auto [begin, end] = mGroupIndex.equal_range(*mask.group);
+            for (auto it = begin; it != end; ++it) {
+                pushIfMatches(it->second);
+            }
+            return matches;
+        }
+
+        if (mask.instance.has_value()) {
+            const auto [begin, end] = mInstanceIndex.equal_range(*mask.instance);
+            for (auto it = begin; it != end; ++it) {
+                pushIfMatches(it->second);
+            }
+            return matches;
+        }
+
+        for (const auto& entry : mIndex) {
+            pushIfMatches(&entry);
+        }
+        return matches;
+    }
+
+    std::vector<const IndexEntry*> Reader::FindEntries(std::string_view label) const {
+        const auto mask = MaskForLabel(label);
+        if (!mask) {
+            return {};
+        }
+        return FindEntries(*mask);
+    }
+
+    std::optional<std::vector<uint8_t>> Reader::ReadFirstMatching(const TgiMask& mask) const {
+        const auto entries = FindEntries(mask);
+        if (entries.empty()) {
+            return std::nullopt;
+        }
+        return ReadEntryData(*entries.front());
+    }
+
+    std::optional<std::vector<uint8_t>> Reader::ReadFirstMatching(std::string_view label) const {
+        const auto mask = MaskForLabel(label);
+        if (!mask) {
+            return std::nullopt;
+        }
+        return ReadFirstMatching(*mask);
     }
 
     bool Reader::ParseBuffer(std::span<const uint8_t> buffer) {
@@ -213,7 +291,7 @@ namespace DBPF {
     }
 
     bool Reader::ParseIndexSpan(std::span<const uint8_t> buffer) {
-        if (buffer.size() < static_cast<size_t>(mHeader.indexEntryCount) * 20) {
+        if (buffer.size() < mHeader.indexEntryCount * 20) {
             return false;
         }
 
@@ -302,8 +380,8 @@ namespace DBPF {
         }
 
         io::MappedFile::Range indexRange;
-        if (!mMappedFile.MapRange(static_cast<uint64_t>(mHeader.indexOffsetLocation),
-                                  static_cast<size_t>(mHeader.indexSize),
+        if (!mMappedFile.MapRange(mHeader.indexOffsetLocation,
+                                  mHeader.indexSize,
                                   indexRange)) {
             return false;
         }
@@ -317,22 +395,22 @@ namespace DBPF {
     }
 
     bool Reader::LoadEntryData(const IndexEntry& entry, EntryData& out) const {
-        const size_t start = static_cast<size_t>(entry.offset);
-        const size_t length = static_cast<size_t>(entry.size);
+        const size_t start = entry.offset;
+        const size_t length = entry.size;
 
         switch (mDataSource) {
         case DataSource::kBuffer: {
             if (mFileBuffer.empty() || start > mFileBuffer.size() || start + length > mFileBuffer.size()) {
                 return false;
             }
-            out.span = std::span<const uint8_t>(mFileBuffer.data() + start, length);
+            out.span = std::span(mFileBuffer.data() + start, length);
             return true;
         }
         case DataSource::kMappedFile: {
             if (!mMappedFile.IsOpen()) {
                 return false;
             }
-            if (!mMappedFile.MapRange(static_cast<uint64_t>(entry.offset), length, out.mappedRange)) {
+            if (!mMappedFile.MapRange(entry.offset, length, out.mappedRange)) {
                 return false;
             }
             out.span = out.mappedRange.View();

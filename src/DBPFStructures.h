@@ -13,9 +13,9 @@ namespace DBPF {
         uint32_t size = 0;
         std::optional<uint32_t> decompressedSize;
 
-        [[nodiscard]] uint32_t GetSize() { return decompressedSize.value_or(size); }
+        [[nodiscard]] uint32_t GetSize() const { return decompressedSize.value_or(size); }
 
-        [[nodiscard]] std::string ToString() {
+        [[nodiscard]] std::string ToString() const {
             return std::format("IndexEntry({0}, {1}, {2})", tgi.ToString(), offset, GetSize());
         }
     };

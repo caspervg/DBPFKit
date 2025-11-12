@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -38,6 +39,12 @@ namespace DBPF {
         [[nodiscard]] const Header& GetHeader() const { return mHeader; }
         [[nodiscard]] const std::vector<IndexEntry>& GetIndex() const { return mIndex; }
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadEntryData(const IndexEntry& entry) const;
+        [[nodiscard]] std::optional<std::vector<uint8_t>> ReadEntryData(const Tgi& tgi) const;
+        [[nodiscard]] const IndexEntry* FindEntry(const Tgi& tgi) const;
+        [[nodiscard]] std::vector<const IndexEntry*> FindEntries(const TgiMask& mask) const;
+        [[nodiscard]] std::vector<const IndexEntry*> FindEntries(std::string_view label) const;
+        [[nodiscard]] std::optional<std::vector<uint8_t>> ReadFirstMatching(const TgiMask& mask) const;
+        [[nodiscard]] std::optional<std::vector<uint8_t>> ReadFirstMatching(std::string_view label) const;
 
     private:
         enum class DataSource {

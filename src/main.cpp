@@ -10,6 +10,7 @@
 #include "FSHReader.h"
 #include "RUL0.h"
 #include "ini.h"
+#include "TGI.h"
 
 #ifdef _WIN32
 #    include <objbase.h>
@@ -178,7 +179,12 @@ auto main() -> int {
     std::filesystem::path outputDir = "fsh_output";
     std::filesystem::create_directories(outputDir);
 
-    int savedImages = 0;
+    auto savedImages = 0;
+
+    auto exemplarEntries = reader.FindEntries("Exemplar");
+    for (const auto& entry : exemplarEntries) {
+        std::println("ExemplarEntry {}: {}", entry->tgi.ToString(), entry->GetSize());
+    }
 
     for (const auto& entry : reader.GetIndex()) {
         if (entry.tgi.type != 0x7AB50E44) {

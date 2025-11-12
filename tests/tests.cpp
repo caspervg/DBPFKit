@@ -368,6 +368,39 @@ TEST_CASE("DBPF reader applies directory metadata when present") {
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
+TEST_CASE("DBPF reader finds entries via masks and catalog labels") {
+    const DBPF::Tgi fshTgi{0x7AB50E44, 0x0986135E, 0x00000011};
+    const DBPF::Tgi s3dTgi{0x5AD0E817, 0xBADB57F1, 0x00000001};
+    const std::vector<TestEntry> entries{
+        TestEntry{fshTgi, {'F', 'S', 'H'}},
+        TestEntry{s3dTgi, {'3', 'D', '!'}},
+    };
+    auto buffer = BuildDbpf(entries);
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+
+    const DBPF::IndexEntry* direct = reader.FindEntry(fshTgi);
+    REQUIRE(direct != nullptr);
+    auto directData = reader.ReadEntryData(fshTgi);
+    REQUIRE(directData.has_value());
+    REQUIRE(*directData == std::vector<uint8_t>{'F', 'S', 'H'});
+
+    DBPF::TgiMask fshMask;
+    fshMask.type = fshTgi.type;
+    auto fshEntries = reader.FindEntries(fshMask);
+    REQUIRE(fshEntries.size() == 1);
+    CHECK(fshEntries[0]->tgi == fshTgi);
+
+    auto fshByLabel = reader.FindEntries("FSH (Base/Overlay Texture)");
+    REQUIRE(fshByLabel.size() == 1);
+    CHECK(fshByLabel[0]->tgi == fshTgi);
+
+    auto s3dBytes = reader.ReadFirstMatching("S3D");
+    REQUIRE(s3dBytes.has_value());
+    REQUIRE(*s3dBytes == std::vector<uint8_t>{'3', 'D', '!'});
+}
+
 TEST_CASE("Exemplar parser handles single and multi-value properties") {
     std::vector<std::vector<uint8_t>> properties;
     properties.push_back(MakeSingleUInt32Property(0x12345678, 0xCAFEBABE));

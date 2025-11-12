@@ -74,7 +74,8 @@ namespace {
 
     std::vector<const TgiLabel*> CandidatesFor(const uint32_t type) {
         std::vector<const TgiLabel*> out;
-        if (auto it = gTgiLabelIndex.typeBuckets.find(type); it != gTgiLabelIndex.typeBuckets.end()) {
+        const auto it = gTgiLabelIndex.typeBuckets.find(type);
+        if (it != gTgiLabelIndex.typeBuckets.end()) {
             out.insert(out.end(), it->second.begin(), it->second.end());
         }
         out.insert(out.end(), gTgiLabelIndex.wildcard.begin(), gTgiLabelIndex.wildcard.end());

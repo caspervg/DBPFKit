@@ -1,360 +1,146 @@
-# SC4 RUL Parser Support Libraries
+# dbpf++
 
-This repository contains a collection of reusable helpers for reading SimCity 4 data formats in C++23. The main components today are:
+C++23 utilities for reading SimCity 4 DBPF archives and the asset formats that live inside them. The library powers the CLI, GUI, and tests in this repo, but it is also designed to be embedded into your own tooling.
 
-- `DBPFReader` / `DBPFTypes`: minimal DBPF archive support, ported from the `scdbpf` reference. Handles chunked records, directory metadata, and exposes helper indexes for TGIs.
-- `QFSDecompressor`: a byte-for-byte decoder that follows wouanagaine’s SC4Mapper 2013 implementation.
-- `S3DReader`: a parser for the `3DMD` mesh format used by SimCity 4 models.
-- `FSHReader`: decodes SC4 texture containers (SHPI/G26x) including DXT1/3/5 bitmaps and mipmaps via libsquish.
-- `Exemplar` helpers: binary exemplar/cohort parser with property introspection and the catalogued TGI labels from scdbpf.
+## Highlights
 
-The sections below outline how to build the project and how to consume each API from your own tools.
+- **DBPF index + I/O** – works from memory buffers or memory-mapped files, understands directory metadata, and resolves catalog labels/TGI masks.
+- **Transparent decompression** – QFS blocks are inflated automatically via `ParseExpected` so callers get real error messages instead of booleans.
+- **Typed loaders** – helpers for Exemplar (binary + text), LText, FSH, S3D, and RUL0 Intersection Ordering records.
+- **Sample fixtures** – `examples/` contains RUL0 snippets, exemplar exports, and DATs for experimentation.
+- **Catch2 coverage** – unit tests exercise every parser; use them as reference implementations when extending the codebase.
 
-## Building & Tests
+## Building
 
-```bash
+```
 cmake -S . -B cmake-build-debug
-cmake --build cmake-build-debug --target SC4RULParserTests
-ctest --test-dir cmake-build-debug --output-on-failure
+cmake --build cmake-build-debug
 ```
 
-The `SC4RULParserLib` static library exposes the public headers under `src/`. Include the directory when adding the target to another project:
+Targets:
 
-```cmake
-add_subdirectory(path/to/sc4-rul-parser)
-target_link_libraries(my_tool PRIVATE SC4RULParserLib)
-target_include_directories(my_tool PRIVATE path/to/sc4-rul-parser/src)
-```
+- `SC4RULParserLib` – static library with all loaders.
+- `SC4RULParser` – CLI sample that dumps FSH/LText data.
+- `SC4RULParserGui` – raylib/ImGui front-end (requires desktop deps).
+- `SC4RULParserTests` – Catch2 suite (`ctest --test-dir cmake-build-debug`).
 
-## DBPF Reader & Types
-
-**Key headers:** `DBPFReader.h`, `DBPFTypes.h`
+## Quick Start
 
 ```cpp
 #include "DBPFReader.h"
+#include "ExemplarReader.h"
 
 DBPF::Reader reader;
-if (!reader.LoadFile("examples/dat/SM2 Mega Prop Pack Vol1.dat")) {
-    throw std::runtime_error("failed to load DAT");
+if (!reader.LoadFile("NAM.dat")) {
+    throw std::runtime_error("Failed to open DAT");
 }
 
 for (const auto& entry : reader.GetIndex()) {
-    auto payload = reader.ReadEntryData(entry);
-    if (!payload) {
-        continue; // skip truncated entries
+    if (entry.tgi.type != 0x6534284A) continue; // exemplar
+
+    auto exemplar = reader.LoadExemplar(entry);
+    if (!exemplar) {
+        std::println("Exemplar {} failed: {}", entry.tgi.ToString(), exemplar.error().message);
+        continue;
     }
-    // entry.tgi gives type/group/instance
-    std::span<const uint8_t> bytes(payload->data(), payload->size());
-    // bytes contains either raw or auto-decompressed bytes
+
+    const auto& record = exemplar.value();
+    std::println("Parent: {}", record.parent.ToString());
+    if (auto name = record.GetScalar<uint32_t>(0x00000020)) {
+        std::println("Name property: 0x{:08X}", *name);
+    }
 }
 ```
 
-Usage notes:
+The high-level API mirrors this pattern for every supported asset. Call `reader.LoadX(entry)` when you already have an index entry, or rely on the convenience overloads (`LoadX(tgi)` / `LoadX(label)` / `LoadX()`) where they make sense.
 
-- `LoadFile(path)` maps the entire DAT into memory and verifies the 0x60-byte header (version `1.0`, index type `7`).
-- `LoadBuffer(data, size)` accepts an in-memory image (useful in tests).
-- `GetIndex()` returns the parsed index entries (`DBPF::IndexEntry`), each with a `Tgi`, file offset, size, and optional `decompressedSize`.
-- `ReadEntryData(entry)` copies the referenced bytes and automatically runs them through the QFS decompressor when needed. If you need raw bytes, test `QFS::Decompressor::IsQFSCompressed` yourself before calling `Decompress` and handle the returned `ParseExpected` accordingly.
-- Directory metadata is applied automatically when an entry with `DBPF::kDirectoryTgi` exists; the `decompressedSize` field is filled for matching entries.
+## Typed Asset Reference
 
-### Convenience lookups
-
-`DBPF::Reader` exposes helpers that sit on top of the catalog in `TGI.cpp`, so you can map straight from human-friendly labels to entries:
+### Exemplar
 
 ```cpp
-DBPF::TgiMask fshMask;
-fshMask.type = 0x7AB50E44; // any FSH
-
-for (const DBPF::IndexEntry* entry : reader.FindEntries(fshMask)) {
-    auto bytes = reader.ReadEntryData(*entry);
-    // ...
+auto exemplar = reader.LoadExemplar("Exemplar (Road)");
+if (!exemplar) {
+    std::println("Exemplar error: {}", exemplar.error().message);
+    return;
 }
+const auto& record = exemplar.value();
+```
 
-auto overlayTextures = reader.FindEntries("FSH (Base/Overlay Texture)");
-auto firstExemplar = reader.ReadFirstMatching("Exemplar");
-auto exact = reader.ReadEntryData(DBPF::Tgi{0x6534284A, 0x2821ED93, 0x12345678});
+- Supports EQZB/CQZB binaries and EQZT/CQZT text exemplars.
+- Text parser understands the scdbpf grammar, hex literals, signed numbers, bool aliases, and string arrays.
+- Every `Exemplar::Record` exposes `FindProperty`, `GetScalar<T>`, and a `Property::ToString()` helper for logging.
 
-if (auto exemplar = reader.LoadExemplar("Exemplar (Road)")) {
-    // exemplar->properties ...
-}
+### LText
 
-if (auto localized = reader.LoadLText("LText")) {
-    std::println("Localized text: {}", localized->ToUtf8());
-}
-
-if (auto rul0 = reader.LoadRUL0()) {
-    std::println("Loaded {} puzzle pieces", rul0->puzzlePieces.size());
-}
-
-auto s3d = reader.LoadS3D(DBPF::Tgi{0x5AD0E817, 0xBADB57F1, 0x00000001});
-if (!s3d) {
-    std::println("S3D failed: {}", s3d.error().message);
+```cpp
+auto text = reader.LoadLText("LText");
+if (!text) {
+    std::println("LText error: {}", text.error().message);
+} else {
+    std::println("{}", text->ToUtf8());
 }
 ```
 
-Use whichever path matches your workflow: exact TGIs, `TgiMask` filters, or the catalog strings shown by `DBPF::Describe`.
+Handles canonical UTF‑16 payloads (two-byte length + 0x1000 marker) and falls back to interpreting the raw bytes as UTF‑8/ASCII when modders ship bare strings. The decoded text is stored as `std::u16string`; use `ToUtf8()` for UI/logging.
 
-- `LoadFSH/LoadS3D/LoadExemplar` wrap the lookup + parse sequence and return `std::expected<...>` results so you can jump straight to the decoded data (see snippet above).
-
-### TGI helpers & labeling
-
-If you need friendlier names or quick lookups for specific type/group/instance combos, the `TGI.h` helpers wrap everything in one place:
+### RUL0 (Intersection Ordering)
 
 ```cpp
-#include "TGI.h"
-
-DBPF::Tgi tgi{0x5AD0E817, 0xBADB57F1, 0x00000000};
-
-std::string_view label = DBPF::Describe(tgi);          // => "S3D (Maxis)"
-auto mask = DBPF::MaskForLabel("Exemplar (T21)");      // optional TgiMask describing that family
-bool isExemplar = mask && mask->Matches(tgi);
-```
-
-- `Tgi` now exposes `ToString()` plus hashing/comparison helpers so you can drop it into `unordered_map` instances for fast T/G/I lookups.
-- `Describe(tgi)` consults a built-in catalog (ported from `scdbpf`) so you can present human-readable labels in UIs or logs.
-- `MaskForLabel(label)` retrieves the `TgiMask` used for that label, which is handy when filtering indexes (e.g., “find all entries whose type=FSH and group=0x0986135e”).
-
-These helpers are self-contained; add more catalog entries by editing `src/TGI.cpp`.
-
-## QFS Decompressor
-
-**Header:** `QFSDecompressor.h`
-
-```cpp
-#include "QFSDecompressor.h"
-
-std::vector<uint8_t> decompressed;
-std::span<const uint8_t> rawSpan(raw.data(), raw.size());
-auto qfsResult = QFS::Decompressor::Decompress(rawSpan, decompressed);
-if (!qfsResult) {
-    throw std::runtime_error(qfsResult.error().message);
+auto rul = reader.LoadRUL0(); // shortcut for the canonical TGI
+if (!rul) {
+    std::println("RUL0 error: {}", rul.error().message);
+} else {
+    std::println("Pieces: {}", rul->puzzlePieces.size());
 }
-// decompressed now holds *qfsResult bytes
 ```
 
-API summary:
+`IntersectionOrdering::Parse` and `reader.LoadRUL0()` feed the existing INI handler, apply `BuildNavigationIndices`, and return the same `Data` structure used by the CLI/GUI.
 
-- `IsQFSCompressed(std::span<const uint8_t>)` checks the 0x10FB signature and minimum header length.
-- `GetUncompressedSize(std::span<const uint8_t>)` returns the 24-bit size stored in the header (0 if not compressed).
-- `Decompress(std::span<const uint8_t>, std::vector<uint8_t>&)` returns `ParseExpected<size_t>`: on success you get the decoded byte count (and the vector is filled); on failure you get a descriptive `ParseError`. The decoder supports the optional “chunk flag” header variant and the literal terminator rules described on the SC4Devotion wiki.
-
-If you need more control (e.g., to stream into a preallocated buffer) you can call `DecompressInternal` directly, but the vector-based helper is usually sufficient.
-
-## FSH Reader
-
-**Headers:** `FSHReader.h`, `FSHStructures.h`
+### FSH
 
 ```cpp
-#include "FSHReader.h"
-
-auto payload = reader.ReadEntryData(entry);                    // DBPF entry with type 0x7AB50E44
-std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
-if (auto fileResult = FSH::Reader::Parse(payloadSpan)) {
-    const auto& file = fileResult.value();
-    for (const auto& tex : file.entries) {
-        for (const auto& mip : tex.bitmaps) {
+auto fsh = reader.LoadFSH(entry);
+if (!fsh) {
+    std::println("FSH error: {}", fsh.error().message);
+} else {
+    for (const auto& texture : fsh->entries) {
+        for (const auto& mip : texture.bitmaps) {
             std::vector<uint8_t> rgba;
             if (FSH::Reader::ConvertToRGBA8(mip, rgba)) {
-                // rgba now contains width*height*4 bytes
+                // use rgba.data()
             }
         }
     }
+}
+```
+
+The loader understands planar bitmaps, DXT1/3/5 (via libsquish), directory labels, mip stacks, and chunked QFS payloads.
+
+### S3D
+
+```cpp
+auto model = reader.LoadS3D(entry);
+if (!model) {
+    std::println("S3D error: {}", model.error().message);
 } else {
-    std::println("FSH parse failed: {}", fileResult.error().message);
+    const auto& mesh = model.value();
+    // use mesh.vertices / mesh.indices
 }
 ```
 
-Highlights:
+Returns an `S3D::Model` with decoded vertex/index buffers plus metadata for LODs and materials. Pair it with FSH to build meshes or feed the provided GUI.
 
-- Supports SHPI/G26x/G35x headers, directory entries, labels/attachments, and the usual SimCity directory IDs (G264/GIMX/etc.).
-- Automatically QFS-decompresses records before parsing.
-- Handles both uncompressed formats (32-bit, 24-bit, 4444/565/1555) and DXT1/3/5 via libsquish. Each entry exposes all mip levels, not just the base texture.
+## Examples & Tests
 
-### Saving textures to disk (CLI helper)
+- `examples/rul0/` – RUL0 fixtures used by the parser and tests.
+- `examples/dat/` – small DAT slices with text exemplars and other assets.
+- `tests/tests.cpp` – Catch2 suite covering DBPF I/O, QFS, Exemplar, LText, RUL0, FSH, and S3D.
 
-`src/main.cpp` contains a convenience path that scans a DAT, decodes the first few FSH entries, and writes them to `./fsh_output`. On Windows this uses WIC via `IWICBitmapEncoder`, so no extra libraries are required. Non-Windows builds skip the PNG export path (the decoder still works, but the sample app just logs a message).
+Run `ctest --test-dir cmake-build-debug --output-on-failure` after making changes. The tests are fast and provide good guardrails when touching parsing logic.
 
-## S3D Reader
+## Contributing
 
-**Headers:** `S3DReader.h`, `S3DStructures.h`
-
-```cpp
-#include "S3DReader.h"
-
-std::vector<uint8_t> s3dData = /* load from DBPF entry */;
-S3D::Model model;
-std::span<const uint8_t> s3dSpan(s3dData.data(), s3dData.size());
-auto parsed = S3D::Reader::Parse(s3dSpan);
-if (!parsed) {
-    throw std::runtime_error(parsed.error().message);
-}
-S3D::Model model = std::move(parsed).value();
-
-for (const auto& vb : model.vertexBuffers) {
-    // vb.vertices, vb.bbMin/bbMax, etc.
-}
-```
-
-Highlights:
-
-- `Reader::Parse(std::span<const uint8_t>) -> std::expected<Model, ParseError>` walks each chunk (`3DMD`, `HEAD`, `VERT`, `INDX`, `PRIM`, `MATS`, `ANIM`). The parser enforces the documented minor versions and vertex formats.
-- `Model` aggregates vertex buffers, index buffers, materials, animations, and bounding boxes. See `S3DStructures.h` for detailed field layouts.
-- The reader intentionally keeps parsing logic simple—no implicit OpenGL bindings or GPU resources—so you can adapt the in-memory model to whatever renderer or exporter you need.
-
-### Example: Rendering S3D via raylib
-
-The project already fetches raylib/imgui for the GUI target, so you can glue the readers together like this:
-
-```cpp
-#include <raylib.h>
-
-#include "DBPFReader.h"
-#include "S3DReader.h"
-
-std::optional<Mesh> BuildMesh(const S3D::Model& model) {
-    if (model.vertexBuffers.empty() || model.indexBuffers.empty()) return std::nullopt;
-    const auto& vb = model.vertexBuffers.front();
-    const auto& ib = model.indexBuffers.front();
-
-    Mesh mesh{};
-    mesh.vertexCount = static_cast<int>(vb.vertices.size());
-    mesh.triangleCount = static_cast<int>(ib.indices.size() / 3);
-    mesh.vertices = MemAlloc(sizeof(float) * 3 * mesh.vertexCount);
-    mesh.colors = MemAlloc(sizeof(unsigned char) * 4 * mesh.vertexCount);
-    mesh.texcoords = MemAlloc(sizeof(float) * 2 * mesh.vertexCount);
-    mesh.indices = MemAlloc(sizeof(unsigned short) * ib.indices.size());
-
-    for (int i = 0; i < mesh.vertexCount; ++i) {
-        const auto& v = vb.vertices[i];
-        float* pos = reinterpret_cast<float*>(mesh.vertices);
-        pos[3 * i + 0] = v.position.x;
-        pos[3 * i + 1] = v.position.y;
-        pos[3 * i + 2] = v.position.z;
-
-        auto* clr = reinterpret_cast<unsigned char*>(mesh.colors);
-        clr[4 * i + 0] = static_cast<unsigned char>(v.color.x * 255.0f);
-        clr[4 * i + 1] = static_cast<unsigned char>(v.color.y * 255.0f);
-        clr[4 * i + 2] = static_cast<unsigned char>(v.color.z * 255.0f);
-        clr[4 * i + 3] = static_cast<unsigned char>(v.color.w * 255.0f);
-
-        float* uv = reinterpret_cast<float*>(mesh.texcoords);
-        uv[2 * i + 0] = v.uv.x;
-        uv[2 * i + 1] = v.uv.y;
-    }
-
-    auto* idx = reinterpret_cast<unsigned short*>(mesh.indices);
-    for (size_t i = 0; i < ib.indices.size(); ++i) {
-        idx[i] = static_cast<unsigned short>(ib.indices[i]);
-    }
-
-    UploadMesh(&mesh, false);
-    return mesh;
-}
-
-int main() {
-    InitWindow(1280, 720, "S3D viewer");
-    Camera3D cam{ {5, 5, 5}, {0, 0, 0}, {0, 1, 0}, 45.0f, CAMERA_PERSPECTIVE };
-
-    DBPF::Reader dbpf;
-    dbpf.LoadFile("examples/dat/SM2 Mega Prop Pack Vol1.dat");
-    const auto& entry = dbpf.GetIndex().front(); // pick your S3D entry
-    auto bytes = dbpf.ReadEntryData(entry);
-
-    S3D::Model model;
-    std::span<const uint8_t> bytesSpan(bytes->data(), bytes->size());
-    auto parsedModel = S3D::Reader::Parse(bytesSpan);
-    if (!parsedModel) {
-        throw std::runtime_error(parsedModel.error().message);
-    }
-    model = std::move(parsedModel).value();
-
-    auto mesh = BuildMesh(model);
-    Model rayModel = LoadModelFromMesh(*mesh);
-
-    while (!WindowShouldClose()) {
-        UpdateCamera(&cam, CAMERA_ORBITAL);
-        BeginDrawing();
-        ClearBackground(RAYWHITE);
-        BeginMode3D(cam);
-        DrawGrid(20, 1.0f);
-        DrawModel(rayModel, Vector3Zero(), 1.0f, WHITE);
-        EndMode3D();
-        EndDrawing();
-    }
-
-    UnloadModel(rayModel);
-    CloseWindow();
-}
-```
-
-From here you can extend the renderer with:
-
-1. Texture lookups (decode the referenced FSH/PNG entries and assign them to `model.materials[i].maps[MATERIAL_MAP_DIFFUSE]`).
-2. Multiple LOD support: iterate through every vertex/index buffer pair in the S3D.
-3. Placement transforms sourced from exemplar entries (apply to `model.transform`).
-4. UI via ImGui to select TGIs, toggle wireframe, and inspect metadata.
-
-## Exemplar Parser
-
-**Headers:** `ExemplarReader.h`, `ExemplarStructures.h`, `TGI.h`
-
-```cpp
-#include "ExemplarReader.h"
-
-auto payload = reader.ReadEntryData(entry);                // entry.tgi.type == 0x6534284A
-std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
-auto result = Exemplar::Parse(payloadSpan);
-if (!result) {
-    throw std::runtime_error(result.error().message);
-}
-const auto& exemplar = result.value();
-std::println("Parent: {}", exemplar.parent.ToString());
-for (const auto& prop : exemplar.properties) {
-    std::println("  {}", prop.ToString());
-}
-```
-
-The parser mirrors scdbpf’s implementation: it handles binary EQZB/CQZB headers, property IDs/types, lists vs. scalars, and exposes a human-friendly `Property::ToString()` (hex + decimal for numeric fields). Text exemplars (`EQZT/CQZT`) follow the same grammar (see `examples/dat/file_dec*.eqz`) and are parsed transparently alongside the binary form.
-All exemplar/FSH/S3D readers return `std::expected<..., ParseError>` so you can bubble the message up or transform it into UI feedback.
-
-## LText Parser
-
-**Headers:** `LTextReader.h`
-
-```cpp
-#include "LTextReader.h"
-
-auto payload = reader.ReadEntryData(entry);                // type 0x2026960B
-std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
-auto text = LText::Parse(payloadSpan);
-if (!text) {
-    throw std::runtime_error(text.error().message);
-}
-std::println("LText UTF-8: {}", text->ToUtf8());
-```
-
-`LText::Record` stores the UTF-16 data (`std::u16string`) and exposes `ToUtf8()` so you can surface localized menu strings in logs or UIs without wrestling with encoding. If SimCity packs plain ASCII/UTF-8 text without the usual 0x1000 control marker, the parser will gracefully fall back to decoding the raw bytes.
-
-## RUL0 Parser
-
-**Header:** `RUL0.h`
-
-```cpp
-#include "RUL0.h"
-
-auto payload = reader.ReadEntryData(entry);                // type 0x0A5BCF4B
-std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
-auto ordering = IntersectionOrdering::Parse(payloadSpan);
-if (!ordering) {
-    throw std::runtime_error(ordering.error().message);
-}
-std::println("Rotation rings: {}", ordering->orderings.size());
-```
-
-`IntersectionOrdering::Parse` feeds the inih-based handler we already used in the CLI, applies `BuildNavigationIndices`, and returns the same `Data` structure consumed by the GUI. When reading from DATs you can skip the manual plumbing entirely via `reader.LoadRUL0(...)` (see the DBPF example above).
-
-## Extending / Integrating
-
-- Add new tests by extending `tests/tests.cpp`; the file already includes helpers for constructing synthetic DBPF archives and verifying QFS + S3D flows.
-- When adding new parsing features, keep sample fixtures under `examples/` and mention them in the README so they can be re-used for manual verification.
-- Follow the formatting and naming conventions noted in `AGENTS.md` to stay consistent with the rest of the codebase.
+- Keep code formatted (`clang-format -i src/*.cpp src/*.h tests/*.cpp`).
+- Document new fixtures under `examples/`.
+- Follow the existing naming/style conventions (see `AGENTS.md` for project-specific notes).

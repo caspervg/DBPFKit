@@ -48,7 +48,7 @@ namespace {
         {{0, 0x4a87bfe8, 0x2a87bffc}, "INI (Font Table)"},
         {{0, 0x8a5971c5, 0x8a5993b9}, "INI (Networks)"},
         {{0, 0x8a5971c5, std::nullopt}, "INI"},
-        {{0x0a5bcf4b, 0xaa5bcf57, std::nullopt}, "RUL"},
+        {{0x0a5bcf4b, 0xaa5bcf57, 0x10000000}, "RUL0 (Intersection Ordering)"},
         {{0xea5118b0, std::nullopt, std::nullopt}, "EffDir"},
         {{std::nullopt, std::nullopt, std::nullopt}, "Unknown"},
     }};

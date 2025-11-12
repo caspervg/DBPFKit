@@ -7,6 +7,7 @@
 #include "ExemplarReader.h"
 #include "FSHReader.h"
 #include "LTextReader.h"
+#include "RUL0.h"
 #include "QFSDecompressor.h"
 #include "S3DReader.h"
 
@@ -208,6 +209,14 @@ namespace DBPF {
         return FindEntries(*mask);
     }
 
+    std::optional<IndexEntry> Reader::FindFirstEntry(std::string_view label) const {
+        const auto entries = FindEntries(label);
+        if (entries.empty()) {
+            return std::nullopt;
+        }
+        return *entries.front();
+    }
+
     std::optional<std::vector<uint8_t>> Reader::ReadFirstMatching(const TgiMask& mask) const {
         const auto entries = FindEntries(mask);
         if (entries.empty()) {
@@ -351,6 +360,23 @@ namespace DBPF {
             return Fail("No entries found for label {}", label);
         }
         return LoadLText(*entries.front());
+    }
+
+    ParseExpected<IntersectionOrdering::Data> Reader::LoadRUL0(const IndexEntry& entry) const {
+        auto payload = ReadEntryData(entry);
+        if (!payload.has_value()) {
+            return Fail("Failed to read entry data for {}", entry.tgi.ToString());
+        }
+        std::span<const uint8_t> buffer(payload->data(), payload->size());
+        return IntersectionOrdering::Parse(buffer);
+    }
+
+    ParseExpected<IntersectionOrdering::Data> Reader::LoadRUL0() const {
+        const auto entry = FindFirstEntry("RUL0 (Intersection Ordering)");
+        if (!entry.has_value()) {
+            return Fail("No RUL0 (Intersection Ordering) entry found");
+        }
+        return LoadRUL0(entry.value());
     }
 
     bool Reader::ParseBuffer(std::span<const uint8_t> buffer) {

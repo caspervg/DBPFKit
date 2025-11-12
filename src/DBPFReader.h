@@ -16,12 +16,14 @@ namespace FSH { struct File; }
 namespace S3D { struct Model; }
 namespace Exemplar { struct Record; }
 namespace LText { struct Record; }
+namespace IntersectionOrdering { struct Data; }
 
 namespace DBPF {
     struct TgiHash;
     struct Tgi;
 
     constexpr Tgi kDirectoryTgi{0xE86B1EEF, 0xE86B1EEF, 0x286B1F03};
+    constexpr Tgi kRul0Tgi{0x0A5BCF4B, 0xAA5BCF57, 0x10000000};
 
     struct Header {
         uint32_t majorVersion = 0;
@@ -47,6 +49,7 @@ namespace DBPF {
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadEntryData(const IndexEntry& entry) const;
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadEntryData(const Tgi& tgi) const;
         [[nodiscard]] const IndexEntry* FindEntry(const Tgi& tgi) const;
+        [[nodiscard]] std::optional<IndexEntry> FindFirstEntry(std::string_view label) const;
         [[nodiscard]] std::vector<const IndexEntry*> FindEntries(const TgiMask& mask) const;
         [[nodiscard]] std::vector<const IndexEntry*> FindEntries(std::string_view label) const;
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadFirstMatching(const TgiMask& mask) const;
@@ -67,6 +70,8 @@ namespace DBPF {
         [[nodiscard]] ParseExpected<LText::Record> LoadLText(const Tgi& tgi) const;
         [[nodiscard]] ParseExpected<LText::Record> LoadLText(const TgiMask& mask) const;
         [[nodiscard]] ParseExpected<LText::Record> LoadLText(std::string_view label) const;
+        [[nodiscard]] ParseExpected<IntersectionOrdering::Data> LoadRUL0(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<IntersectionOrdering::Data> LoadRUL0() const;
 
     private:
         enum class DataSource {

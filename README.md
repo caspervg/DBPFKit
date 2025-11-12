@@ -82,6 +82,10 @@ if (auto localized = reader.LoadLText("LText")) {
     std::println("Localized text: {}", localized->ToUtf8());
 }
 
+if (auto rul0 = reader.LoadRUL0()) {
+    std::println("Loaded {} puzzle pieces", rul0->puzzlePieces.size());
+}
+
 auto s3d = reader.LoadS3D(DBPF::Tgi{0x5AD0E817, 0xBADB57F1, 0x00000001});
 if (!s3d) {
     std::println("S3D failed: {}", s3d.error().message);
@@ -330,6 +334,24 @@ std::println("LText UTF-8: {}", text->ToUtf8());
 ```
 
 `LText::Record` stores the UTF-16 data (`std::u16string`) and exposes `ToUtf8()` so you can surface localized menu strings in logs or UIs without wrestling with encoding. If SimCity packs plain ASCII/UTF-8 text without the usual 0x1000 control marker, the parser will gracefully fall back to decoding the raw bytes.
+
+## RUL0 Parser
+
+**Header:** `RUL0.h`
+
+```cpp
+#include "RUL0.h"
+
+auto payload = reader.ReadEntryData(entry);                // type 0x0A5BCF4B
+std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
+auto ordering = IntersectionOrdering::Parse(payloadSpan);
+if (!ordering) {
+    throw std::runtime_error(ordering.error().message);
+}
+std::println("Rotation rings: {}", ordering->orderings.size());
+```
+
+`IntersectionOrdering::Parse` feeds the inih-based handler we already used in the CLI, applies `BuildNavigationIndices`, and returns the same `Data` structure consumed by the GUI. When reading from DATs you can skip the manual plumbing entirely via `reader.LoadRUL0(...)` (see the DBPF example above).
 
 ## Extending / Integrating
 

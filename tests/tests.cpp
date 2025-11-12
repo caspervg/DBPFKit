@@ -15,6 +15,7 @@
 #include "FSHReader.h"
 #include "QFSDecompressor.h"
 #include "LTextReader.h"
+#include "RUL0.h"
 #include "squish/squish.h"
 
 namespace {
@@ -469,6 +470,32 @@ TEST_CASE("DBPF reader loads LText entries") {
     CHECK(byLabel->text == direct->text);
 }
 
+TEST_CASE("DBPF reader loads RUL0 entries") {
+    const DBPF::Tgi rulTgi{0x0A5BCF4B, 0xAA5BCF57, 0x10000000};
+    const std::string text =
+        "RotationRing=0x0A5BCF4B\n"
+        "AddTypes=0x0A5BCF4B\n"
+        "[HighwayIntersectionInfo_0x00000002]\n"
+        "Piece=0.0, 0.0, 0, 0, 0x00000002\n";
+    const std::vector<TestEntry> entries{
+        TestEntry{rulTgi, std::vector<uint8_t>(text.begin(), text.end())},
+    };
+    auto buffer = BuildDbpf(entries);
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+
+    auto data = reader.LoadRUL0();
+    REQUIRE(data.has_value());
+    CHECK(data->puzzlePieces.size() == 1);
+
+    const auto* entry = reader.FindEntry(rulTgi);
+    REQUIRE(entry != nullptr);
+    auto viaEntry = reader.LoadRUL0(*entry);
+    REQUIRE(viaEntry.has_value());
+    CHECK(viaEntry->puzzlePieces.size() == 1);
+}
+
 TEST_CASE("Exemplar parser handles single and multi-value properties") {
     std::vector<std::vector<uint8_t>> properties;
     properties.push_back(MakeSingleUInt32Property(0x12345678, 0xCAFEBABE));
@@ -572,6 +599,25 @@ TEST_CASE("LText parser falls back to raw ASCII blobs") {
     auto parsed = LText::Parse(span);
     REQUIRE(parsed.has_value());
     CHECK(parsed->ToUtf8() == "Welcome to the RLS Vacation Resort!");
+}
+
+TEST_CASE("RUL0 parser loads minimal ordering data") {
+    const std::string text =
+        "RotationRing=0x0A5BCF4B\n"
+        "AddTypes=0x0A5BCF4B\n"
+        "\n"
+        "[HighwayIntersectionInfo_0x00000001]\n"
+        "Piece=0.0, 0.0, 0, 0, 0x00000001\n"
+        "AutoPlace=1\n";
+    std::span<const uint8_t> span(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+    auto parsed = IntersectionOrdering::Parse(span);
+    REQUIRE(parsed.has_value());
+    auto data = std::move(parsed).value();
+    CHECK(data.orderings.size() == 1);
+    REQUIRE(data.puzzlePieces.size() == 1);
+    const auto& piece = data.puzzlePieces.begin()->second;
+    CHECK(piece.autoPlace);
+    CHECK(piece.effect.initialized);
 }
 
 TEST_CASE("FSH reader parses simple uncompressed bitmap") {

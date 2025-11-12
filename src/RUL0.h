@@ -1,8 +1,11 @@
 #pragma once
 #include <algorithm>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "ParseTypes.h"
 
 namespace IntersectionOrdering {
 
@@ -230,4 +233,6 @@ namespace IntersectionOrdering {
 
     // Main transformation pipeline
     void BuildNavigationIndices(Data& data);
+
+    [[nodiscard]] ParseExpected<Data> Parse(std::span<const uint8_t> buffer);
 }

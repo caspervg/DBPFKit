@@ -5,7 +5,238 @@
 #include <format>
 #include <ranges>
 
+#include "ParseTypes.h"
+#include "ini.h"
+
 namespace IntersectionOrdering {
+    // Convert PuzzlePiece to human-readable string representation
+    std::string PuzzlePiece::ToString() const {
+        std::string result = std::format("Piece 0x{:08X}", id);
+
+        // Add name if available
+        if (!effect.name.empty()) {
+            result += std::format(" - {}", effect.name);
+        }
+
+        // Add grid dimensions
+        if (!cellLayout.empty()) {
+            size_t cols = cellLayout.empty() ? 0 : cellLayout[0].size();
+            result += std::format("\n  Grid: {} rows x {} cols", cellLayout.size(), cols);
+        }
+
+        // Add check types information
+        if (!checkTypes.empty()) {
+            result += std::format("\n  CheckTypes: {} defined", checkTypes.size());
+            for (const auto& ct : checkTypes) {
+                if (ct.initialized || true) {
+                    result += std::format("\n    Symbol '{}': {} network(s)", ct.symbol, ct.networks.size());
+                    for (const auto& net : ct.networks) {
+                        result += " [";
+                        switch (net.networkType) {
+                        case NetworkType::ROAD:
+                            result += "Road";
+                            break;
+                        case NetworkType::RAIL:
+                            result += "Rail";
+                            break;
+                        case NetworkType::HIGHWAY:
+                            result += "Highway";
+                            break;
+                        case NetworkType::STREET:
+                            result += "Street";
+                            break;
+                        case NetworkType::PIPE:
+                            result += "Pipe";
+                            break;
+                        case NetworkType::POWERLINE:
+                            result += "Powerline";
+                            break;
+                        case NetworkType::AVENUE:
+                            result += "Avenue";
+                            break;
+                        case NetworkType::SUBWAY:
+                            result += "Subway";
+                            break;
+                        case NetworkType::LIGHT_RAIL:
+                            result += "LightRail";
+                            break;
+                        case NetworkType::MONORAIL:
+                            result += "Monorail";
+                            break;
+                        case NetworkType::ONE_WAY_ROAD:
+                            result += "OneWayRoad";
+                            break;
+                        case NetworkType::DIRT_ROAD:
+                            result += "DirtRoad";
+                            break;
+                        case NetworkType::GROUND_HIGHWAY:
+                            result += "GroundHighway";
+                            break;
+                        default:
+                            result += "Unknown";
+                            break;
+                        }
+                        result += "]";
+                    }
+                }
+            }
+        }
+
+        // Add preview effect information
+        if (effect.initialized) {
+            result += std::format("\n  Preview: pos({}, {}), rot={}°, flip={}",
+                                  effect.x, effect.y, effect.rotation, effect.flip);
+        }
+
+        // Add base IDs if they're set
+        if (autoTileBase != 0xFFFFFFFF) {
+            result += std::format("\n  AutoTileBase: 0x{:08X}", autoTileBase);
+        }
+        if (autoPathBase != 0xFFFFFFFF) {
+            result += std::format("\n  AutoPathBase: 0x{:08X}", autoPathBase);
+        }
+
+        // Add transformation info if applicable
+        if (copyFrom != 0) {
+            result += std::format("\n  CopyFrom: 0x{:08X}", copyFrom);
+        }
+        if (rotate != Rotation::NONE) {
+            result += std::format("\n  Rotate: {} (90° increments)", +rotate);
+        }
+        if (transpose) {
+            result += "\n  Transpose: true";
+        }
+        if (translate.initialized) {
+            result += std::format("\n  Translate: ({}, {})", translate.x, translate.z);
+        }
+
+        // Add costs if set
+        if (costs != 0xFFFFFFFF) {
+            result += std::format("\n  Costs: {}", costs);
+        }
+
+        // Add OneWayDir if set
+        if (oneWayDir != OneWayDir::NONE) {
+            result += std::format("\n  OneWayDir: {}", +oneWayDir);
+        }
+
+        return result;
+    }
+
+    uint32_t ParsePieceId(std::string_view section) {
+        const auto prefixLength = strlen(kIntersectionInfoPrefix);
+        const auto val = section.substr(prefixLength, section.size() - prefixLength);
+        return std::strtoul(val.data(), nullptr, 16);
+    }
+
+
+    std::vector<uint32_t> ParseIdList(std::string_view value) {
+        std::vector<uint32_t> result;
+        size_t start = 0;
+
+        while (start < value.size()) {
+            size_t end = value.find(kListDelimiter, start);
+            if (end == std::string_view::npos) {
+                end = value.size();
+            }
+            auto idStr = value.substr(start, end - start);
+            result.push_back(std::strtoul(idStr.data(), nullptr, 16));
+            start = end + 1;
+        }
+
+        return result;
+    }
+
+    bool ParsePieceValue(std::string_view value, PreviewEffect& previewEffect) {
+        float x, y; // The game reads these specifically in English number formatting
+        int rotation, flip; // The game reads these as %i (which can also be octal or hexadecimal format), so we do too
+        uint32_t instanceId;
+        std::string name;
+        const auto res = sscanf_s(value.data(), "%f, %f, %i, %i, 0x%x", &x, &y, &rotation, &flip, &instanceId);
+        if (res != 5) {
+            return false;
+        }
+        previewEffect.initialized = true;
+        previewEffect.x = x;
+        previewEffect.y = y;
+        previewEffect.rotation = rotation;
+        previewEffect.flip = flip;
+        previewEffect.instanceId = instanceId;
+        return true;
+    }
+
+    CheckType ParseCheckType(std::string_view value) {
+        CheckType ct;
+        ct.symbol = value[0];
+
+        // Find dash and get everything after it
+        size_t dashPos = value.find('-');
+        if (dashPos == std::string_view::npos)
+            return ct;
+
+        std::string_view rest = value.substr(dashPos + 1);
+
+        // Helper lambda to get the next token
+        auto nextToken = [&rest]() -> std::string_view {
+            // Skip whitespace
+            while (!rest.empty() && (rest[0] == ' ' || rest[0] == '\t')) {
+                rest.remove_prefix(1);
+            }
+            if (rest.empty())
+                return {};
+
+            // Find end of token (space, comma, colon, or end)
+            size_t end = rest.find_first_of(" \t,:");
+            std::string_view token = rest.substr(0, end);
+            rest.remove_prefix(end == std::string_view::npos ? rest.size() : end);
+            return token;
+        };
+
+        auto expectChar = [&rest](char c) -> bool {
+            while (!rest.empty() && (rest[0] == ' ' || rest[0] == '\t')) {
+                rest.remove_prefix(1);
+            }
+            if (!rest.empty() && rest[0] == c) {
+                rest.remove_prefix(1);
+                return true;
+            }
+            return false;
+        };
+
+        // Parse loop
+        while (!rest.empty()) {
+            auto token = nextToken();
+            if (token.empty())
+                break;
+
+            if (token == "optional") {
+                if (!ct.networks.empty())
+                    ct.networks.back().optional = true;
+            }
+            else if (token == "check") {
+                if (!ct.networks.empty())
+                    ct.networks.back().check = true;
+            }
+            else if (expectChar(':')) {
+                // It's a network definition
+                NetworkCheck nc;
+                nc.networkType = ParseNetworkType(token);
+
+                auto flags = nextToken();
+                nc.ruleFlagByte = std::stoul(std::string(flags), nullptr, 16);
+
+                if (expectChar(',')) {
+                    auto mask = nextToken();
+                    nc.hexMask = std::stoul(std::string(mask), nullptr, 16);
+                }
+
+                ct.networks.push_back(nc);
+            }
+        }
+
+        return ct;
+    }
+
     int IniHandler(void* user, const char* section, const char* key, const char* value) {
         auto* data = static_cast<Data*>(user);
         const auto secStr = std::string_view(section);
@@ -157,120 +388,6 @@ namespace IntersectionOrdering {
         }
 
         return 1;
-    }
-
-    uint32_t ParsePieceId(std::string_view section) {
-        const auto prefixLength = strlen(kIntersectionInfoPrefix);
-        const auto val = section.substr(prefixLength, section.size() - prefixLength);
-        return std::strtoul(val.data(), nullptr, 16);
-    }
-
-
-    std::vector<uint32_t> ParseIdList(std::string_view value) {
-        std::vector<uint32_t> result;
-        size_t start = 0;
-
-        while (start < value.size()) {
-            size_t end = value.find(kListDelimiter, start);
-            if (end == std::string_view::npos) {
-                end = value.size();
-            }
-            auto idStr = value.substr(start, end - start);
-            result.push_back(std::strtoul(idStr.data(), nullptr, 16));
-            start = end + 1;
-        }
-
-        return result;
-    }
-
-    bool ParsePieceValue(std::string_view value, PreviewEffect& previewEffect) {
-        float x, y; // The game reads these specifically in English number formatting
-        int rotation, flip; // The game reads these as %i (which can also be octal or hexadecimal format), so we do too
-        uint32_t instanceId;
-        std::string name;
-        const auto res = sscanf_s(value.data(), "%f, %f, %i, %i, 0x%x", &x, &y, &rotation, &flip, &instanceId);
-        if (res != 5) {
-            return false;
-        }
-        previewEffect.initialized = true;
-        previewEffect.x = x;
-        previewEffect.y = y;
-        previewEffect.rotation = rotation;
-        previewEffect.flip = flip;
-        previewEffect.instanceId = instanceId;
-        return true;
-    }
-
-    CheckType ParseCheckType(std::string_view value) {
-        CheckType ct;
-        ct.symbol = value[0];
-
-        // Find dash and get everything after it
-        size_t dashPos = value.find('-');
-        if (dashPos == std::string_view::npos)
-            return ct;
-
-        std::string_view rest = value.substr(dashPos + 1);
-
-        // Helper lambda to get the next token
-        auto nextToken = [&rest]() -> std::string_view {
-            // Skip whitespace
-            while (!rest.empty() && (rest[0] == ' ' || rest[0] == '\t')) {
-                rest.remove_prefix(1);
-            }
-            if (rest.empty())
-                return {};
-
-            // Find end of token (space, comma, colon, or end)
-            size_t end = rest.find_first_of(" \t,:");
-            std::string_view token = rest.substr(0, end);
-            rest.remove_prefix(end == std::string_view::npos ? rest.size() : end);
-            return token;
-        };
-
-        auto expectChar = [&rest](char c) -> bool {
-            while (!rest.empty() && (rest[0] == ' ' || rest[0] == '\t')) {
-                rest.remove_prefix(1);
-            }
-            if (!rest.empty() && rest[0] == c) {
-                rest.remove_prefix(1);
-                return true;
-            }
-            return false;
-        };
-
-        // Parse loop
-        while (!rest.empty()) {
-            auto token = nextToken();
-            if (token.empty())
-                break;
-
-            if (token == "optional") {
-                if (!ct.networks.empty())
-                    ct.networks.back().optional = true;
-            }
-            else if (token == "check") {
-                if (!ct.networks.empty())
-                    ct.networks.back().check = true;
-            }
-            else if (expectChar(':')) {
-                // It's a network definition
-                NetworkCheck nc;
-                nc.networkType = ParseNetworkType(token);
-
-                auto flags = nextToken();
-                nc.ruleFlagByte = std::stoul(std::string(flags), nullptr, 16);
-
-                if (expectChar(',')) {
-                    auto mask = nextToken();
-                    nc.hexMask = std::stoul(std::string(mask), nullptr, 16);
-                }
-
-                ct.networks.push_back(nc);
-            }
-        }
-
-        return ct;
     }
 
     // rotation: 0=0°, 1=90°CW, 2=180°, 3=270°CW
@@ -587,118 +704,18 @@ namespace IntersectionOrdering {
         }
     }
 
-    // Convert PuzzlePiece to human-readable string representation
-    std::string PuzzlePiece::ToString() const {
-        std::string result = std::format("Piece 0x{:08X}", id);
-
-        // Add name if available
-        if (!effect.name.empty()) {
-            result += std::format(" - {}", effect.name);
-        }
-
-        // Add grid dimensions
-        if (!cellLayout.empty()) {
-            size_t cols = cellLayout.empty() ? 0 : cellLayout[0].size();
-            result += std::format("\n  Grid: {} rows x {} cols", cellLayout.size(), cols);
-        }
-
-        // Add check types information
-        if (!checkTypes.empty()) {
-            result += std::format("\n  CheckTypes: {} defined", checkTypes.size());
-            for (const auto& ct : checkTypes) {
-                if (ct.initialized || true) {
-                    result += std::format("\n    Symbol '{}': {} network(s)", ct.symbol, ct.networks.size());
-                    for (const auto& net : ct.networks) {
-                        result += " [";
-                        switch (net.networkType) {
-                        case NetworkType::ROAD:
-                            result += "Road";
-                            break;
-                        case NetworkType::RAIL:
-                            result += "Rail";
-                            break;
-                        case NetworkType::HIGHWAY:
-                            result += "Highway";
-                            break;
-                        case NetworkType::STREET:
-                            result += "Street";
-                            break;
-                        case NetworkType::PIPE:
-                            result += "Pipe";
-                            break;
-                        case NetworkType::POWERLINE:
-                            result += "Powerline";
-                            break;
-                        case NetworkType::AVENUE:
-                            result += "Avenue";
-                            break;
-                        case NetworkType::SUBWAY:
-                            result += "Subway";
-                            break;
-                        case NetworkType::LIGHT_RAIL:
-                            result += "LightRail";
-                            break;
-                        case NetworkType::MONORAIL:
-                            result += "Monorail";
-                            break;
-                        case NetworkType::ONE_WAY_ROAD:
-                            result += "OneWayRoad";
-                            break;
-                        case NetworkType::DIRT_ROAD:
-                            result += "DirtRoad";
-                            break;
-                        case NetworkType::GROUND_HIGHWAY:
-                            result += "GroundHighway";
-                            break;
-                        default:
-                            result += "Unknown";
-                            break;
-                        }
-                        result += "]";
-                    }
-                }
+    ParseExpected<Data> Parse(std::span<const uint8_t> buffer) {
+        Data data;
+        auto text = reinterpret_cast<const char*>(buffer.data());
+        const int parseResult = ini_parse_string_length(text, buffer.size(), IniHandler, &data);
+        if (parseResult != 0) {
+            if (parseResult > 0) {
+                return Fail("Failed to parse RUL0 data at line {}", parseResult);
             }
+            return Fail("Failed to parse RUL0 data");
         }
-
-        // Add preview effect information
-        if (effect.initialized) {
-            result += std::format("\n  Preview: pos({}, {}), rot={}°, flip={}",
-                                  effect.x, effect.y, effect.rotation, effect.flip);
-        }
-
-        // Add base IDs if they're set
-        if (autoTileBase != 0xFFFFFFFF) {
-            result += std::format("\n  AutoTileBase: 0x{:08X}", autoTileBase);
-        }
-        if (autoPathBase != 0xFFFFFFFF) {
-            result += std::format("\n  AutoPathBase: 0x{:08X}", autoPathBase);
-        }
-
-        // Add transformation info if applicable
-        if (copyFrom != 0) {
-            result += std::format("\n  CopyFrom: 0x{:08X}", copyFrom);
-        }
-        if (rotate != Rotation::NONE) {
-            result += std::format("\n  Rotate: {} (90° increments)", +rotate);
-        }
-        if (transpose) {
-            result += "\n  Transpose: true";
-        }
-        if (translate.initialized) {
-            result += std::format("\n  Translate: ({}, {})", translate.x, translate.z);
-        }
-
-        // Add costs if set
-        if (costs != 0xFFFFFFFF) {
-            result += std::format("\n  Costs: {}", costs);
-        }
-
-        // Add OneWayDir if set
-        if (oneWayDir != OneWayDir::NONE) {
-            result += std::format("\n  OneWayDir: {}", +oneWayDir);
-        }
-
-        return result;
+        BuildNavigationIndices(data);
+        return data;
     }
 
 }

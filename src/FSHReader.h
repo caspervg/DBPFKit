@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstring>
+#include <span>
 #include <vector>
 
 #include "FSHStructures.h"
@@ -9,7 +10,7 @@ namespace FSH {
 
 class Reader {
 public:
-    static bool Parse(const uint8_t* data, size_t size, File& outFile);
+    static bool Parse(std::span<const uint8_t> buffer, File& outFile);
     static bool ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA);
 
 private:

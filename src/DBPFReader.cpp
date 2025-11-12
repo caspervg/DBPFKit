@@ -1,7 +1,6 @@
 #include "DBPFReader.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <print>
 
 #include "QFSDecompressor.h"
@@ -26,34 +25,18 @@ namespace {
 namespace DBPF {
 
     bool Reader::LoadFile(const std::filesystem::path& path) {
-        FILE* file = std::fopen(path.string().c_str(), "rb");
-        if (!file) {
+        mFileBuffer.clear();
+        mMappedFile.Close();
+        mDataSource = DataSource::kNone;
+
+        if (!mMappedFile.Open(path)) {
             return false;
         }
 
-        if (std::fseek(file, 0, SEEK_END) != 0) {
-            std::fclose(file);
-            return false;
-        }
-        long size = std::ftell(file);
-        if (size <= 0) {
-            std::fclose(file);
-            return false;
-        }
-        if (std::fseek(file, 0, SEEK_SET) != 0) {
-            std::fclose(file);
-            return false;
-        }
-
-        mFileBuffer.resize(static_cast<size_t>(size));
-        if (std::fread(mFileBuffer.data(), 1, mFileBuffer.size(), file) != mFileBuffer.size()) {
-            mFileBuffer.clear();
-            std::fclose(file);
-            return false;
-        }
-        std::fclose(file);
-        if (!ParseBuffer(std::span<const uint8_t>(mFileBuffer.data(), mFileBuffer.size()))) {
-            mFileBuffer.clear();
+        mDataSource = DataSource::kMappedFile;
+        if (!ParseMappedFile()) {
+            mMappedFile.Close();
+            mDataSource = DataSource::kNone;
             return false;
         }
         return true;
@@ -64,9 +47,12 @@ namespace DBPF {
             return false;
         }
 
+        mMappedFile.Close();
         mFileBuffer.assign(data, data + size);
+        mDataSource = DataSource::kBuffer;
         if (!ParseBuffer(std::span<const uint8_t>(mFileBuffer.data(), mFileBuffer.size()))) {
             mFileBuffer.clear();
+            mDataSource = DataSource::kNone;
             return false;
         }
         return true;
@@ -108,7 +94,7 @@ namespace DBPF {
     bool AlignToQfsSignature(const uint8_t*& dataStart, size_t& dataSize) {
         for (size_t i = 0; i + 1 < dataSize && i < 16; ++i) {
             uint16_t candidate = static_cast<uint16_t>(static_cast<uint16_t>(dataStart[i]) << 8) |
-                                 static_cast<uint16_t>(dataStart[i + 1]);
+                static_cast<uint16_t>(dataStart[i + 1]);
             if (candidate == QFS::MAGIC_COMPRESSED) {
                 if (i > 0) {
                     dataStart += i;
@@ -121,16 +107,15 @@ namespace DBPF {
     }
 
     std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const IndexEntry& entry) const {
-        const auto start = static_cast<size_t>(entry.offset);
-        const auto length = static_cast<size_t>(entry.size);
-        if (mFileBuffer.empty() || start + length > mFileBuffer.size()) {
+        EntryData entryData;
+        if (!LoadEntryData(entry, entryData)) {
             std::println("[DBPF] Invalid bounds for entry {} (offset {}, size {})",
                          entry.tgi.ToString(), entry.offset, entry.size);
             return std::nullopt;
         }
 
-        const uint8_t* dataStart = mFileBuffer.data() + start;
-        size_t dataSize = length;
+        const uint8_t* dataStart = entryData.span.data();
+        size_t dataSize = entryData.span.size();
 
         uint32_t chunkHeaderSize = 0;
         uint32_t chunkBodySize = 0;
@@ -148,11 +133,13 @@ namespace DBPF {
 
         std::vector<uint8_t> data(dataStart, dataStart + dataSize);
 
-        if (QFS::Decompressor::IsQFSCompressed(data.data(), data.size())) {
+        std::span<const uint8_t> dataSpan(data.data(), data.size());
+
+        if (QFS::Decompressor::IsQFSCompressed(dataSpan)) {
             std::println("[DBPF] Decompressing entry {} ({} bytes)",
                          entry.tgi.ToString(), data.size());
             std::vector<uint8_t> decompressed;
-            if (!QFS::Decompressor::Decompress(data.data(), data.size(), decompressed)) {
+            if (!QFS::Decompressor::Decompress(dataSpan, decompressed)) {
                 std::println("[DBPF] QFS decompression failed for {}", entry.tgi.ToString());
                 return std::nullopt;
             }
@@ -166,6 +153,10 @@ namespace DBPF {
 
     bool Reader::ParseBuffer(std::span<const uint8_t> buffer) {
         mIndex.clear();
+        mTGIIndex.clear();
+        mTypeIndex.clear();
+        mGroupIndex.clear();
+        mInstanceIndex.clear();
         if (buffer.size() < kHeaderSize) {
             return false;
         }
@@ -177,7 +168,7 @@ namespace DBPF {
             mIndex.clear();
             return false;
         }
-        if (!ApplyDirectoryMetadata(buffer)) {
+        if (!ApplyDirectoryMetadata()) {
             return false;
         }
         return true;
@@ -198,8 +189,7 @@ namespace DBPF {
         mHeader.indexType = ReadUInt32LE(buffer.data() + 32);
         mHeader.indexEntryCount = ReadUInt32LE(buffer.data() + 36);
         mHeader.indexOffsetLocation = ReadUInt32LE(buffer.data() + 40);
-        mHeader
-            .indexSize = ReadUInt32LE(buffer.data() + 44);
+        mHeader.indexSize = ReadUInt32LE(buffer.data() + 44);
         mHeader.holeEntryCount = ReadUInt32LE(buffer.data() + 48);
         mHeader.holeOffsetLocation = ReadUInt32LE(buffer.data() + 52);
         mHeader.holeSize = ReadUInt32LE(buffer.data() + 56);
@@ -219,12 +209,22 @@ namespace DBPF {
             return false;
         }
 
-        const uint8_t* ptr = buffer.data() + indexOffset;
-        mIndex.clear();
-        mIndex.reserve(mHeader.indexEntryCount);
+        return ParseIndexSpan(buffer.subspan(indexOffset, mHeader.indexSize));
+    }
+
+    bool Reader::ParseIndexSpan(std::span<const uint8_t> buffer) {
+        if (buffer.size() < static_cast<size_t>(mHeader.indexEntryCount) * 20) {
+            return false;
+        }
+
+        const uint8_t* ptr = buffer.data();
+        const uint8_t* end = buffer.data() + buffer.size();
+
+        std::vector<IndexEntry> parsed;
+        parsed.reserve(mHeader.indexEntryCount);
 
         for (uint32_t i = 0; i < mHeader.indexEntryCount; ++i) {
-            if (ptr + 20 > buffer.data() + buffer.size()) {
+            if (ptr + 20 > end) {
                 return false;
             }
             IndexEntry entry;
@@ -233,11 +233,16 @@ namespace DBPF {
             entry.tgi.instance = ReadUInt32LE(ptr + 8);
             entry.offset = ReadUInt32LE(ptr + 12);
             entry.size = ReadUInt32LE(ptr + 16);
-            mIndex.push_back(entry);
+            parsed.push_back(entry);
             ptr += 20;
         }
 
-        // Now build the quick indices
+        mIndex = std::move(parsed);
+        mTGIIndex.clear();
+        mTypeIndex.clear();
+        mGroupIndex.clear();
+        mInstanceIndex.clear();
+
         for (auto& entry : mIndex) {
             mTGIIndex.emplace(entry.tgi, &entry);
             mTypeIndex.emplace(entry.tgi.type, &entry);
@@ -248,48 +253,94 @@ namespace DBPF {
         return true;
     }
 
-    bool Reader::ApplyDirectoryMetadata(std::span<const uint8_t> buffer) {
-        const auto dirIt = std::find_if(mIndex.begin(), mIndex.end(), [](const IndexEntry& entry) {
-            return entry.tgi == kDirectoryTgi;
-        });
-        if (dirIt == mIndex.end()) {
+    bool Reader::ApplyDirectoryMetadata() {
+        const auto dirIt = mTGIIndex.find(kDirectoryTgi);
+        if (dirIt == mTGIIndex.end() || dirIt->second == nullptr) {
             return true;
         }
 
-        const auto spanOpt = GetEntrySpan(*dirIt, buffer);
-        if (!spanOpt) {
+        EntryData directoryData;
+        if (!LoadEntryData(*dirIt->second, directoryData)) {
             return false;
         }
 
-        auto span = *spanOpt;
+        const auto span = directoryData.span;
         const uint8_t* ptr = span.data();
         const uint8_t* end = ptr + span.size();
-        while (ptr + 16 <= end) {
+
+        // Each directory record is 16 bytes: type, group, instance, decompressedSize
+        constexpr size_t kRecordSize = 16;
+        while (static_cast<size_t>(end - ptr) >= kRecordSize) {
             Tgi tgi;
             tgi.type = ReadUInt32LE(ptr);
             tgi.group = ReadUInt32LE(ptr + 4);
             tgi.instance = ReadUInt32LE(ptr + 8);
             uint32_t decompressed = ReadUInt32LE(ptr + 12);
 
-            auto target = std::find_if(mIndex.begin(), mIndex.end(), [&](IndexEntry& entry) {
-                return entry.tgi == tgi;
-            });
-            if (target != mIndex.end()) {
-                target->decompressedSize = decompressed;
+            auto it = mTGIIndex.find(tgi);
+            if (it != mTGIIndex.end() && it->second != nullptr) {
+                it->second->decompressedSize = decompressed;
             }
-            ptr += 16;
+
+            ptr += kRecordSize;
         }
         return true;
     }
 
-    std::optional<std::span<const uint8_t>> Reader::GetEntrySpan(const IndexEntry& entry,
-                                                                 const std::span<const uint8_t> buffer) const {
-        const auto start = static_cast<size_t>(entry.offset);
-        const auto length = static_cast<size_t>(entry.size);
-        if (start + length > buffer.size()) {
-            return std::nullopt;
+    bool Reader::ParseMappedFile() {
+        mIndex.clear();
+        mTGIIndex.clear();
+        mTypeIndex.clear();
+        mGroupIndex.clear();
+        mInstanceIndex.clear();
+        io::MappedFile::Range headerRange;
+        if (!mMappedFile.MapRange(0, kHeaderSize, headerRange)) {
+            return false;
         }
-        return buffer.subspan(start, length);
+        if (!ParseHeader(headerRange.View())) {
+            return false;
+        }
+
+        io::MappedFile::Range indexRange;
+        if (!mMappedFile.MapRange(static_cast<uint64_t>(mHeader.indexOffsetLocation),
+                                  static_cast<size_t>(mHeader.indexSize),
+                                  indexRange)) {
+            return false;
+        }
+        if (!ParseIndexSpan(indexRange.View())) {
+            return false;
+        }
+        if (!ApplyDirectoryMetadata()) {
+            return false;
+        }
+        return true;
+    }
+
+    bool Reader::LoadEntryData(const IndexEntry& entry, EntryData& out) const {
+        const size_t start = static_cast<size_t>(entry.offset);
+        const size_t length = static_cast<size_t>(entry.size);
+
+        switch (mDataSource) {
+        case DataSource::kBuffer: {
+            if (mFileBuffer.empty() || start > mFileBuffer.size() || start + length > mFileBuffer.size()) {
+                return false;
+            }
+            out.span = std::span<const uint8_t>(mFileBuffer.data() + start, length);
+            return true;
+        }
+        case DataSource::kMappedFile: {
+            if (!mMappedFile.IsOpen()) {
+                return false;
+            }
+            if (!mMappedFile.MapRange(static_cast<uint64_t>(entry.offset), length, out.mappedRange)) {
+                return false;
+            }
+            out.span = out.mappedRange.View();
+            return out.span.size() == length;
+        }
+        default:
+            return false;
+        }
     }
 
 } // namespace DBPF

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <initializer_list>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -9,7 +10,7 @@
 
 #include "DBPFReader.h"
 #include "DBPFStructures.h"
-#include "Exemplar.h"
+#include "ExemplarReader.h"
 #include "FSHReader.h"
 #include "QFSDecompressor.h"
 #include "squish/squish.h"
@@ -278,9 +279,10 @@ std::vector<uint8_t> BuildDxtFsh(std::vector<uint8_t>& blocks, int& widthOut, in
 TEST_CASE("QFS decompressor matches reference literal handling") {
     auto compressed = SampleQfsPayload();
     std::vector<uint8_t> output;
-    REQUIRE(QFS::Decompressor::IsQFSCompressed(compressed.data(), compressed.size()));
-    REQUIRE(QFS::Decompressor::GetUncompressedSize(compressed.data(), compressed.size()) == 4);
-    REQUIRE(QFS::Decompressor::Decompress(compressed.data(), compressed.size(), output));
+    std::span<const uint8_t> compressedSpan(compressed.data(), compressed.size());
+    REQUIRE(QFS::Decompressor::IsQFSCompressed(compressedSpan));
+    REQUIRE(QFS::Decompressor::GetUncompressedSize(compressedSpan) == 4);
+    REQUIRE(QFS::Decompressor::Decompress(compressedSpan, output));
     REQUIRE(output == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
@@ -373,7 +375,8 @@ TEST_CASE("Exemplar parser handles single and multi-value properties") {
     properties.push_back(MakeStringProperty(0x0000DEAD, "Test"));
 
     auto buffer = BuildExemplarBuffer(properties);
-    auto parsed = Exemplar::Parse(buffer.data(), buffer.size());
+    std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
+    auto parsed = Exemplar::Parse(bufferSpan);
     REQUIRE(parsed.success);
     REQUIRE(parsed.record.properties.size() == 3);
 
@@ -401,15 +404,17 @@ TEST_CASE("Exemplar parser rejects text exemplars") {
     buffer.insert(buffer.end(), signature, signature + 8);
     buffer.resize(24, 0);
 
-    auto parsed = Exemplar::Parse(buffer.data(), buffer.size());
+    std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
+    auto parsed = Exemplar::Parse(bufferSpan);
     REQUIRE_FALSE(parsed.success);
     REQUIRE(parsed.errorMessage.find("text") != std::string::npos);
 }
 
 TEST_CASE("FSH reader parses simple uncompressed bitmap") {
     auto buffer = BuildSimpleFsh();
+    std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
     FSH::File file;
-    REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
+    REQUIRE(FSH::Reader::Parse(bufferSpan, file));
     REQUIRE(file.entries.size() == 1);
     REQUIRE(file.entries[0].bitmaps.size() == 1);
     const auto& bmp = file.entries[0].bitmaps[0];
@@ -421,8 +426,9 @@ TEST_CASE("FSH reader parses simple uncompressed bitmap") {
 
 TEST_CASE("FSH reader converts 32-bit bitmap to RGBA8") {
     auto buffer = BuildSimpleFsh();
+    std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
     FSH::File file;
-    REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
+    REQUIRE(FSH::Reader::Parse(bufferSpan, file));
     std::vector<uint8_t> rgba;
     REQUIRE(file.entries.size() == 1);
     REQUIRE(file.entries[0].bitmaps.size() == 1);
@@ -439,8 +445,9 @@ TEST_CASE("FSH reader decodes DXT1 bitmap") {
     int width = 0;
     int height = 0;
     auto buffer = BuildDxtFsh(blocks, width, height);
+    std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
     FSH::File file;
-    REQUIRE(FSH::Reader::Parse(buffer.data(), buffer.size(), file));
+    REQUIRE(FSH::Reader::Parse(bufferSpan, file));
     REQUIRE(file.entries.size() == 1);
     REQUIRE_FALSE(file.entries[0].bitmaps.empty());
     const auto& bmp = file.entries[0].bitmaps[0];

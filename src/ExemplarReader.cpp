@@ -1,7 +1,6 @@
-#include "Exemplar.h"
+#include "ExemplarReader.h"
 
 #include <cstring>
-#include <format>
 
 namespace {
 
@@ -199,8 +198,8 @@ namespace {
                     error = MakeError("failed to read multi-string payload");
                     return false;
                 }
-                property.values.push_back(std::move(value));
                 property.isList = false;
+                property.values.push_back(std::move(value));
                 return true;
             }
 
@@ -217,7 +216,51 @@ namespace {
             return true;
         }
 
-        error = MakeError("unsupported key type");
+        if (keyType == 0x0081) {
+            if (!reader.CanRead(9)) {
+                error = MakeError("unexpected end of buffer while reading string-array header");
+                return false;
+            }
+
+            reader.ptr++; // skip unused flag
+            uint32_t totalLength = 0;
+            reader.ReadLE(totalLength);
+            uint32_t entryCount = 0;
+            reader.ReadLE(entryCount);
+
+            property.isList = true;
+            property.values.reserve(entryCount);
+
+            if (!reader.CanRead(totalLength)) {
+                error = MakeError("unexpected end of buffer while reading string-array payload");
+                return false;
+            }
+
+            const uint8_t* offsetPtr = reader.ptr;
+            const uint8_t* stringPtr = reader.ptr + entryCount * 4;
+            if (stringPtr > reader.end || stringPtr + totalLength > reader.end) {
+                error = MakeError("string-array payload exceeds buffer bounds");
+                return false;
+            }
+
+            for (uint32_t i = 0; i < entryCount; ++i) {
+                uint32_t length = 0;
+                std::memcpy(&length, offsetPtr + i * 4, sizeof(uint32_t));
+                Exemplar::ValueVariant value;
+                SpanReader stringReader{stringPtr, stringPtr + length};
+                if (!ReadStringValue(stringReader, length, value)) {
+                    error = MakeError("failed to read string-array entry");
+                    return false;
+                }
+                property.values.push_back(std::move(value));
+                stringPtr += length;
+            }
+
+            reader.ptr += totalLength;
+            return true;
+        }
+
+        error = MakeError("unsupported property key type");
         return false;
     }
 
@@ -225,21 +268,15 @@ namespace {
 
 namespace Exemplar {
 
-    const Property* Record::FindProperty(uint32_t id) const {
-        for (const auto& prop : properties) {
-            if (prop.id == id) {
-                return &prop;
-            }
-        }
-        return nullptr;
-    }
-
-    ParseResult Parse(const uint8_t* data, size_t size) {
+    ParseResult Parse(std::span<const uint8_t> buffer) {
         ParseResult result{};
-        if (!data || size < kHeaderSize) {
+        if (buffer.size() < kHeaderSize) {
             result.errorMessage = "buffer too small";
             return result;
         }
+
+        const uint8_t* data = buffer.data();
+        const size_t size = buffer.size();
 
         SignatureInfo info = ParseSignature(data, size);
         if (!info.valid) {
@@ -279,57 +316,5 @@ namespace Exemplar {
         return result;
     }
 
-    std::string Property::ToString() const {
-        auto typeLabel = [this]() -> const char* {
-            switch (type) {
-                case ValueType::UInt8: return "UInt8";
-                case ValueType::UInt16: return "UInt16";
-                case ValueType::UInt32: return "UInt32";
-                case ValueType::SInt32: return "SInt32";
-                case ValueType::SInt64: return "SInt64";
-                case ValueType::Float32: return "Float32";
-                case ValueType::Bool: return "Bool";
-                case ValueType::String: return "String";
-            }
-            return "Unknown";
-        };
-
-        auto valueToString = [](const ValueVariant& value) -> std::string {
-            return std::visit([]<typename T0>(T0&& v) -> std::string {
-                using T = std::decay_t<T0>;
-                if constexpr (std::is_same_v<T, std::string>) {
-                    return std::string("\"") + v + "\"";
-                } else if constexpr (std::is_same_v<T, bool>) {
-                    return v ? "true" : "false";
-                } else if constexpr (std::is_floating_point_v<T>) {
-                    return std::format("{:.3f}", v);
-                } else if constexpr (std::is_integral_v<T>) {
-                    return std::format("0x{:08X} ({})", static_cast<uint32_t>(v), static_cast<int64_t>(v));
-                } else {
-                    return std::format("{}", v);
-                }
-            }, value);
-        };
-
-        std::string header = std::format("0x{:08X} [{}] ", id, typeLabel());
-        if (values.empty()) {
-            return header + "(empty)";
-        }
-
-        std::string result = header;
-        if (isList || values.size() > 1) {
-            result += "[";
-            for (size_t i = 0; i < values.size(); ++i) {
-                if (i > 0) {
-                    result += ", ";
-                }
-                result += valueToString(values[i]);
-            }
-            result += "]";
-        } else {
-            result += valueToString(values.front());
-        }
-        return result;
-    }
-
 } // namespace Exemplar
+

@@ -5,13 +5,13 @@
 
 namespace S3D {
 
-    bool Reader::Parse(const uint8_t* buffer, size_t bufferSize, Model& outModel) {
-        if (!buffer || bufferSize < 12) {
+    bool Reader::Parse(std::span<const uint8_t> buffer, Model& outModel) {
+        if (buffer.size() < 12) {
             return false;
         }
 
-        const uint8_t* ptr = buffer;
-        const uint8_t* end = buffer + bufferSize;
+        const uint8_t* ptr = buffer.data();
+        const uint8_t* end = buffer.data() + buffer.size();
 
         if (!CheckMagic(ptr, end, "3DMD")) {
             return false;

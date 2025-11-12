@@ -1,9 +1,7 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -42,6 +40,7 @@ namespace Exemplar {
         std::vector<Property> properties;
 
         [[nodiscard]] const Property* FindProperty(uint32_t id) const;
+
         template<typename T>
         std::optional<T> GetScalar(uint32_t id) const {
             const Property* prop = FindProperty(id);
@@ -61,9 +60,5 @@ namespace Exemplar {
         std::string errorMessage;
     };
 
-    [[nodiscard]] ParseResult Parse(const uint8_t* data, size_t size);
-    [[nodiscard]] inline ParseResult Parse(std::span<const uint8_t> buffer) {
-        return Parse(buffer.data(), buffer.size());
-    }
-
 } // namespace Exemplar
+

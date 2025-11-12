@@ -4,12 +4,13 @@
 
 #include <cstdint>
 #include <cstring>
+#include <span>
 
 namespace S3D {
 
     class Reader {
     public:
-        static bool Parse(const uint8_t* buffer, size_t bufferSize, Model& outModel);
+        static bool Parse(std::span<const uint8_t> buffer, Model& outModel);
 
     private:
         static bool ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Model& model);

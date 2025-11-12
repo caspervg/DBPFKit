@@ -30,22 +30,25 @@ namespace {
 
 namespace QFS {
 
-    bool Decompressor::Decompress(const uint8_t* input, size_t inputSize, std::vector<uint8_t>& output) {
-        if (!input || inputSize < 5) {
+    bool Decompressor::Decompress(std::span<const uint8_t> input, std::vector<uint8_t>& output) {
+        if (input.size() < 5) {
             return false;
         }
 
-        if (((static_cast<uint16_t>(input[0] & 0xFE) << 8) | input[1]) != MAGIC_COMPRESSED) {
+        const uint8_t* data = input.data();
+        const size_t size = input.size();
+
+        if (((static_cast<uint16_t>(data[0] & 0xFE) << 8) | data[1]) != MAGIC_COMPRESSED) {
             return false;
         }
 
-        const uint32_t uncompressedSize = Read24BE(input);
+        const uint32_t uncompressedSize = Read24BE(data);
         output.assign(uncompressedSize, 0);
         if (uncompressedSize == 0) {
             return true;
         }
 
-        if (!DecompressInternal(input, inputSize, output.data(), uncompressedSize)) {
+        if (!DecompressInternal(data, size, output.data(), uncompressedSize)) {
             output.clear();
             return false;
         }
@@ -53,18 +56,19 @@ namespace QFS {
         return true;
     }
 
-    bool Decompressor::IsQFSCompressed(const uint8_t* data, size_t size) {
-        if (!data || size < 5) {
+    bool Decompressor::IsQFSCompressed(std::span<const uint8_t> buffer) {
+        if (buffer.size() < 5) {
             return false;
         }
+        const uint8_t* data = buffer.data();
         return ((static_cast<uint16_t>(data[0] & 0xFE) << 8) | data[1]) == MAGIC_COMPRESSED;
     }
 
-    uint32_t Decompressor::GetUncompressedSize(const uint8_t* data, size_t size) {
-        if (!IsQFSCompressed(data, size)) {
+    uint32_t Decompressor::GetUncompressedSize(std::span<const uint8_t> buffer) {
+        if (!IsQFSCompressed(buffer)) {
             return 0;
         }
-        return Read24BE(data);
+        return Read24BE(buffer.data());
     }
 
     bool Decompressor::DecompressInternal(const uint8_t* input, size_t inputSize,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #define QFS_DEBUG true
@@ -12,9 +13,9 @@ namespace QFS {
 
     class Decompressor {
     public:
-        static bool Decompress(const uint8_t* input, size_t inputSize, std::vector<uint8_t>& output);
-        static bool IsQFSCompressed(const uint8_t* data, size_t size);
-        static uint32_t GetUncompressedSize(const uint8_t* data, size_t size);
+        static bool Decompress(std::span<const uint8_t> input, std::vector<uint8_t>& output);
+        static bool IsQFSCompressed(std::span<const uint8_t> buffer);
+        static uint32_t GetUncompressedSize(std::span<const uint8_t> buffer);
 
     private:
         static bool DecompressInternal(const uint8_t* input, size_t inputSize,

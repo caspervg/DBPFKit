@@ -44,7 +44,8 @@ for (const auto& entry : reader.GetIndex()) {
         continue; // skip truncated entries
     }
     // entry.tgi gives type/group/instance
-    // payload->data() contains either raw or auto-decompressed bytes
+    std::span<const uint8_t> bytes(payload->data(), payload->size());
+    // bytes contains either raw or auto-decompressed bytes
 }
 ```
 
@@ -84,16 +85,17 @@ These helpers are self-contained; add more catalog entries by editing `src/TGI.c
 #include "QFSDecompressor.h"
 
 std::vector<uint8_t> decompressed;
-if (QFS::Decompressor::Decompress(raw.data(), raw.size(), decompressed)) {
+std::span<const uint8_t> rawSpan(raw.data(), raw.size());
+if (QFS::Decompressor::Decompress(rawSpan, decompressed)) {
     // decompressed now holds the inflated bytes
 }
 ```
 
 API summary:
 
-- `IsQFSCompressed(const uint8_t*, size_t)` checks the 0x10FB signature and minimum header length.
-- `GetUncompressedSize(...)` returns the 24-bit size stored in the header (0 if not compressed).
-- `Decompress(...)` validates the header, resizes the output vector to the advertised length, and decodes the packcode stream. It supports the optional “chunk flag” header variant and the literal terminator rules described on the SC4Devotion wiki.
+- `IsQFSCompressed(std::span<const uint8_t>)` checks the 0x10FB signature and minimum header length.
+- `GetUncompressedSize(std::span<const uint8_t>)` returns the 24-bit size stored in the header (0 if not compressed).
+- `Decompress(std::span<const uint8_t>, std::vector<uint8_t>&)` validates the header, resizes the output vector to the advertised length, and decodes the packcode stream. It supports the optional “chunk flag” header variant and the literal terminator rules described on the SC4Devotion wiki.
 
 If you need more control (e.g., to stream into a preallocated buffer) you can call `DecompressInternal` directly, but the vector-based helper is usually sufficient.
 
@@ -105,8 +107,9 @@ If you need more control (e.g., to stream into a preallocated buffer) you can ca
 #include "FSHReader.h"
 
 auto payload = reader.ReadEntryData(entry);                    // DBPF entry with type 0x7AB50E44
+std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
 FSH::File file;
-if (FSH::Reader::Parse(payload->data(), payload->size(), file)) {
+if (FSH::Reader::Parse(payloadSpan, file)) {
     for (const auto& tex : file.entries) {
         for (const auto& mip : tex.bitmaps) {
             std::vector<uint8_t> rgba;
@@ -137,7 +140,8 @@ Highlights:
 
 std::vector<uint8_t> s3dData = /* load from DBPF entry */;
 S3D::Model model;
-if (!S3D::Reader::Parse(s3dData.data(), s3dData.size(), model)) {
+std::span<const uint8_t> s3dSpan(s3dData.data(), s3dData.size());
+if (!S3D::Reader::Parse(s3dSpan, model)) {
     throw std::runtime_error("invalid S3D");
 }
 
@@ -148,7 +152,7 @@ for (const auto& vb : model.vertexBuffers) {
 
 Highlights:
 
-- `Reader::Parse(const uint8_t*, size_t, Model&)` walks each chunk (`3DMD`, `HEAD`, `VERT`, `INDX`, `PRIM`, `MATS`, `ANIM`). The parser enforces the documented minor versions and vertex formats.
+- `Reader::Parse(std::span<const uint8_t>, Model&)` walks each chunk (`3DMD`, `HEAD`, `VERT`, `INDX`, `PRIM`, `MATS`, `ANIM`). The parser enforces the documented minor versions and vertex formats.
 - `Model` aggregates vertex buffers, index buffers, materials, animations, and bounding boxes. See `S3DStructures.h` for detailed field layouts.
 - The reader intentionally keeps parsing logic simple—no implicit OpenGL bindings or GPU resources—so you can adapt the in-memory model to whatever renderer or exporter you need.
 
@@ -212,7 +216,8 @@ int main() {
     auto bytes = dbpf.ReadEntryData(entry);
 
     S3D::Model model;
-    S3D::Reader::Parse(bytes->data(), bytes->size(), model);
+    std::span<const uint8_t> bytesSpan(bytes->data(), bytes->size());
+    S3D::Reader::Parse(bytesSpan, model);
 
     auto mesh = BuildMesh(model);
     Model rayModel = LoadModelFromMesh(*mesh);
@@ -242,13 +247,14 @@ From here you can extend the renderer with:
 
 ## Exemplar Parser
 
-**Headers:** `Exemplar.h`, `TGI.h`
+**Headers:** `ExemplarReader.h`, `ExemplarStructures.h`, `TGI.h`
 
 ```cpp
-#include "Exemplar.h"
+#include "ExemplarReader.h"
 
 auto payload = reader.ReadEntryData(entry);                // entry.tgi.type == 0x6534284A
-auto result = Exemplar::Parse(payload->data(), payload->size());
+std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
+auto result = Exemplar::Parse(payloadSpan);
 if (result.success) {
     const auto& exemplar = result.record;
     std::println("Parent: {}", exemplar.parent.ToString());

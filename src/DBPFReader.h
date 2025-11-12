@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "DBPFStructures.h"
+#include "MappedFile.h"
 
 namespace DBPF {
     struct TgiHash;
@@ -39,21 +40,35 @@ namespace DBPF {
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadEntryData(const IndexEntry& entry) const;
 
     private:
+        enum class DataSource {
+            kNone,
+            kBuffer,
+            kMappedFile
+        };
+
+        struct EntryData {
+            std::span<const uint8_t> span{};
+            io::MappedFile::Range mappedRange{};
+        };
+
         bool ParseBuffer(std::span<const uint8_t> buffer);
         bool ParseHeader(std::span<const uint8_t> buffer);
         bool ParseIndex(std::span<const uint8_t> buffer);
-        bool ApplyDirectoryMetadata(std::span<const uint8_t> buffer);
-        [[nodiscard]] std::optional<std::span<const uint8_t>> GetEntrySpan(const IndexEntry& entry,
-                                                                           std::span<const uint8_t> buffer) const;
+        bool ParseIndexSpan(std::span<const uint8_t> buffer);
+        bool ApplyDirectoryMetadata();
+        bool ParseMappedFile();
+        bool LoadEntryData(const IndexEntry& entry, EntryData& out) const;
 
         std::vector<uint8_t> mFileBuffer;
+        io::MappedFile mMappedFile;
         Header mHeader{};
         std::vector<IndexEntry> mIndex;
 
-        std::unordered_map<Tgi, const IndexEntry*, TgiHash> mTGIIndex;
-        std::unordered_multimap<uint32_t, const IndexEntry*> mTypeIndex;
-        std::unordered_multimap<uint32_t, const IndexEntry*> mGroupIndex;
-        std::unordered_multimap<uint32_t, const IndexEntry*> mInstanceIndex;
+        std::unordered_map<Tgi, IndexEntry*, TgiHash> mTGIIndex;
+        std::unordered_multimap<uint32_t, IndexEntry*> mTypeIndex;
+        std::unordered_multimap<uint32_t, IndexEntry*> mGroupIndex;
+        std::unordered_multimap<uint32_t, IndexEntry*> mInstanceIndex;
+        DataSource mDataSource = DataSource::kNone;
     };
 
 } // namespace DBPF

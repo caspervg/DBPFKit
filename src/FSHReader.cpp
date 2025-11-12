@@ -32,22 +32,23 @@ std::string MakeName(const char name[4]) {
 
 namespace FSH {
 
-bool Reader::Parse(const uint8_t* data, size_t size, File& outFile) {
-    if (!data || size < sizeof(FileHeader)) {
+bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
+    if (buffer.size() < sizeof(FileHeader)) {
         return false;
     }
 
     std::vector<uint8_t> decompressed;
-    const uint8_t* filePtr = data;
-    size_t fileSize = size;
+    std::span<const uint8_t> fileSpan = buffer;
 
-    if (QFS::Decompressor::IsQFSCompressed(data, size)) {
-        if (!QFS::Decompressor::Decompress(data, size, decompressed)) {
+    if (QFS::Decompressor::IsQFSCompressed(buffer)) {
+        if (!QFS::Decompressor::Decompress(buffer, decompressed)) {
             return false;
         }
-        filePtr = decompressed.data();
-        fileSize = decompressed.size();
+        fileSpan = std::span<const uint8_t>(decompressed.data(), decompressed.size());
     }
+
+    const uint8_t* filePtr = fileSpan.data();
+    const size_t fileSize = fileSpan.size();
 
     const uint8_t* ptr = filePtr;
     const uint8_t* end = filePtr + fileSize;

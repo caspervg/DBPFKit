@@ -14,6 +14,19 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(libsquish)
 
+set(MIO_COMMIT 8b6b7d878c89e81614d05edca7936de41ccdd2da)
+FetchContent_Declare(
+        mio
+        GIT_REPOSITORY https://github.com/vimpunk/mio.git
+        GIT_TAG ${MIO_COMMIT}
+        GIT_SHALLOW 1
+)
+FetchContent_GetProperties(mio)
+if (NOT mio_POPULATED)
+    FetchContent_MakeAvailable(mio)
+endif()
+set(MIO_INCLUDE_DIR ${mio_SOURCE_DIR}/include)
+
 find_package(raylib QUIET)
 if (NOT raylib_FOUND)
     FetchContent_Declare(
@@ -61,14 +74,17 @@ add_library(SC4RULParserLib STATIC
     src/RUL0.cpp
     src/FSHReader.cpp
     src/QFSDecompressor.cpp
-    src/Exemplar.cpp
+    src/ExemplarReader.cpp
+    src/ExemplarStructures.cpp
     src/DBPFReader.cpp
+    src/MappedFile.cpp
     src/S3DReader.cpp
     src/TGI.cpp
 )
 target_include_directories(SC4RULParserLib PUBLIC
     src
     vendor/inih
+    ${MIO_INCLUDE_DIR}
 )
 target_link_libraries(SC4RULParserLib PRIVATE libsquish::Squish)
 

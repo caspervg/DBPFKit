@@ -3,9 +3,10 @@
 #include <ostream>
 #include <print>
 #include <ranges>
+#include <span>
 
 #include "DBPFReader.h"
-#include "Exemplar.h"
+#include "ExemplarReader.h"
 #include "FSHReader.h"
 #include "RUL0.h"
 #include "ini.h"
@@ -37,13 +38,15 @@ ExemplarLoadResult LoadExemplar(const DBPF::Reader& reader,
         return out;
     }
 
+    std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
+
     std::println("[{}] size={} label={} head={:02X} {:02X} {:02X} {:02X}",
                  entry.tgi.ToString(),
                  entry.decompressedSize.value_or(entry.size),
                  DBPF::Describe(entry.tgi),
                  (*payload)[0], (*payload)[1], (*payload)[2], (*payload)[3]);
 
-    auto parsed = Exemplar::Parse(payload->data(), payload->size());
+    auto parsed = Exemplar::Parse(payloadSpan);
     if (!parsed.success) {
         out.error = parsed.errorMessage.empty()
             ? "parse failed without message"
@@ -147,7 +150,7 @@ namespace {
 
 auto main() -> int {
     IntersectionOrdering::Data data;
-    if (ini_parse("../examples/rul0/nam_full.txt", IntersectionOrdering::IniHandler, &data) < 0) {
+    if (ini_parse("../examples/rul0/4023_FARR-2-3_Crossings.txt", IntersectionOrdering::IniHandler, &data) < 0) {
         std::println("An error occurred during parsing");
     }
 
@@ -167,7 +170,7 @@ auto main() -> int {
     std::println("{}", count);
 
     DBPF::Reader reader;
-    if (!reader.LoadFile("../examples/dat/SM2 Mega Prop Pack Vol1.dat")) {
+    if (!reader.LoadFile("../examples/dat/051-non-pac_000.dat")) {
         std::println("Failed to load DAT");
         return 1;
     }
@@ -187,8 +190,10 @@ auto main() -> int {
             continue;
         }
 
+        std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
+
         FSH::File file;
-        if (!FSH::Reader::Parse(payload->data(), payload->size(), file)) {
+        if (!FSH::Reader::Parse(payloadSpan, file)) {
             std::println("Failed to parse FSH {}", entry.tgi.ToString());
             continue;
         }
@@ -217,7 +222,7 @@ auto main() -> int {
             }
         }
 
-        if (savedImages >= 10) {
+        if (savedImages >= 200) {
             break;
         }
     }

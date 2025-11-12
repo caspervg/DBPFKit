@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <initializer_list>
 #include <span>
 #include <string>
@@ -13,6 +14,7 @@
 #include "ExemplarReader.h"
 #include "FSHReader.h"
 #include "QFSDecompressor.h"
+#include "LTextReader.h"
 #include "squish/squish.h"
 
 namespace {
@@ -274,6 +276,19 @@ std::vector<uint8_t> BuildDxtFsh(std::vector<uint8_t>& blocks, int& widthOut, in
     return buffer;
 }
 
+std::vector<uint8_t> BuildLTextBuffer(std::u16string_view text) {
+    const uint16_t charCount = static_cast<uint16_t>(text.size());
+    std::vector<uint8_t> buffer(4 + static_cast<size_t>(charCount) * 2);
+    buffer[0] = static_cast<uint8_t>(charCount & 0xFF);
+    buffer[1] = static_cast<uint8_t>((charCount >> 8) & 0xFF);
+    buffer[2] = 0x00;
+    buffer[3] = 0x10;
+    if (!text.empty()) {
+        std::memcpy(buffer.data() + 4, text.data(), static_cast<size_t>(charCount) * 2);
+    }
+    return buffer;
+}
+
 } // namespace
 
 TEST_CASE("QFS decompressor matches reference literal handling") {
@@ -282,7 +297,9 @@ TEST_CASE("QFS decompressor matches reference literal handling") {
     std::span<const uint8_t> compressedSpan(compressed.data(), compressed.size());
     REQUIRE(QFS::Decompressor::IsQFSCompressed(compressedSpan));
     REQUIRE(QFS::Decompressor::GetUncompressedSize(compressedSpan) == 4);
-    REQUIRE(QFS::Decompressor::Decompress(compressedSpan, output));
+    auto decompressed = QFS::Decompressor::Decompress(compressedSpan, output);
+    REQUIRE(decompressed.has_value());
+    CHECK(*decompressed == 4);
     REQUIRE(output == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
@@ -433,6 +450,25 @@ TEST_CASE("DBPF typed loaders parse FSH and Exemplar entries") {
     CHECK(missing.error().message.find("label") != std::string::npos);
 }
 
+TEST_CASE("DBPF reader loads LText entries") {
+    const DBPF::Tgi ltextTgi{0x2026960B, 0x00000000, 0x00000001};
+    const std::vector<TestEntry> entries{
+        TestEntry{ltextTgi, BuildLTextBuffer(u"Menu Item")},
+    };
+    auto buffer = BuildDbpf(entries);
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+
+    auto direct = reader.LoadLText(ltextTgi);
+    REQUIRE(direct.has_value());
+    CHECK(direct->ToUtf8() == "Menu Item");
+
+    auto byLabel = reader.LoadLText("LText");
+    REQUIRE(byLabel.has_value());
+    CHECK(byLabel->text == direct->text);
+}
+
 TEST_CASE("Exemplar parser handles single and multi-value properties") {
     std::vector<std::vector<uint8_t>> properties;
     properties.push_back(MakeSingleUInt32Property(0x12345678, 0xCAFEBABE));
@@ -506,6 +542,36 @@ TEST_CASE("Exemplar parser reports syntax errors in text exemplars") {
     auto parsed = Exemplar::Parse(bufferSpan);
     REQUIRE_FALSE(parsed.has_value());
     CHECK(parsed.error().message.find("property list") != std::string::npos);
+}
+
+TEST_CASE("LText parser decodes UTF-16 payloads") {
+    std::u16string text = u"City ";
+    text.push_back(static_cast<char16_t>(0xD83D));
+    text.push_back(static_cast<char16_t>(0xDE00)); // 😀 surrogate pair
+    auto buffer = BuildLTextBuffer(text);
+    std::span<const uint8_t> span(buffer.data(), buffer.size());
+    auto parsed = LText::Parse(span);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed->text == text);
+    CHECK(parsed->ToUtf8() == std::string("City \xF0\x9F\x98\x80"));
+}
+
+TEST_CASE("LText parser rejects invalid control markers") {
+    auto buffer = BuildLTextBuffer(u"Test");
+    buffer[2] = 0xFF;
+    std::span<const uint8_t> span(buffer.data(), buffer.size());
+    auto parsed = LText::Parse(span);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed->ToUtf8() == "Test");
+}
+
+TEST_CASE("LText parser falls back to raw ASCII blobs") {
+    const std::string ascii = "Welcome to the RLS Vacation Resort!\0";
+    std::vector<uint8_t> buffer(ascii.begin(), ascii.end());
+    std::span<const uint8_t> span(buffer.data(), buffer.size());
+    auto parsed = LText::Parse(span);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed->ToUtf8() == "Welcome to the RLS Vacation Resort!");
 }
 
 TEST_CASE("FSH reader parses simple uncompressed bitmap") {

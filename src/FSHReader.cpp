@@ -33,20 +33,17 @@ std::string MakeName(const char name[4]) {
 namespace FSH {
 
 ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
-    auto fail = [](std::string message) -> ParseExpected<File> {
-        return std::unexpected(MakeParseError(std::move(message)));
-    };
-
     if (buffer.size() < sizeof(FileHeader)) {
-        return fail("buffer too small for FSH header");
+        return Fail("Buffer too small for FSH header");
     }
 
     std::vector<uint8_t> decompressed;
     std::span<const uint8_t> fileSpan = buffer;
 
     if (QFS::Decompressor::IsQFSCompressed(buffer)) {
-        if (!QFS::Decompressor::Decompress(buffer, decompressed)) {
-            return fail("failed to decompress FSH payload");
+        auto result = QFS::Decompressor::Decompress(buffer, decompressed);
+        if (!result.has_value()) {
+            return Fail("Failed to decompress FSH payload: {}", result.error().message);
         }
         fileSpan = std::span<const uint8_t>(decompressed.data(), decompressed.size());
     }
@@ -62,16 +59,16 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
         !ReadValue(ptr, end, outFile.header.size) ||
         !ReadValue(ptr, end, outFile.header.numEntries) ||
         !ReadValue(ptr, end, outFile.header.dirId)) {
-        return fail("failed to read FSH header");
+        return Fail("Failed to read FSH header");
     }
 
     if (!outFile.header.IsValid()) {
-        return fail("invalid FSH header");
+        return Fail("Invalid FSH header");
     }
 
     struct DirEntryParsed {
         std::string name;
-        uint32_t offset;
+        uint32_t offset{};
     };
 
     std::vector<DirEntryParsed> directory(outFile.header.numEntries);
@@ -79,7 +76,7 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
         DirectoryEntry dir{};
         if (!ReadBytes(ptr, end, dir.name, sizeof(dir.name)) ||
             !ReadValue(ptr, end, dir.offset)) {
-            return fail("failed to read FSH directory entry");
+            return Fail("Failed to read FSH directory entry");
         }
         directory[i].name = MakeName(dir.name);
         directory[i].offset = dir.offset;
@@ -94,7 +91,7 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
                                         ? directory[i + 1].offset
                                         : static_cast<uint32_t>(fileSize);
         if (offset >= fileSize || offset >= nextOffset) {
-            return fail("invalid FSH directory offsets");
+            return Fail("Invalid FSH directory offsets");
         }
 
         const uint8_t* entryPtr = filePtr + offset;
@@ -107,7 +104,7 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
         uint32_t blockSize = 0;
         if (!ReadBytes(entryPtr, entryEnd, &record, 1) ||
             !ReadUInt24(entryPtr, entryEnd, blockSize)) {
-            return fail("failed to read FSH record header");
+            return Fail("Failed to read FSH record header");
         }
 
         uint16_t width = 0, height = 0;
@@ -119,7 +116,7 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
             !ReadValue(entryPtr, entryEnd, yCenter) ||
             !ReadValue(entryPtr, entryEnd, xOffset) ||
             !ReadValue(entryPtr, entryEnd, yOffset)) {
-            return fail("failed to read FSH record dimensions");
+            return Fail("Failed to read FSH record dimensions");
         }
 
         entry.formatCode = record & 0x7F;
@@ -141,7 +138,7 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
             bitmap.mipLevel = mip;
             const size_t dataSize = bitmap.ExpectedDataSize();
             if (entryPtr + dataSize > entryEnd) {
-                return fail("bitmap data exceeds entry bounds");
+                return Fail("Bitmap data exceeds entry bounds");
             }
             bitmap.data.assign(entryPtr, entryPtr + dataSize);
             entryPtr += dataSize;
@@ -153,8 +150,8 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
             if (attachmentOffset + 4 < nextOffset) {
                 const uint8_t* attachment = filePtr + attachmentOffset;
                 if (attachment[0] == 0x70) {
-                    const char* labelStart = reinterpret_cast<const char*>(attachment + 4);
-                    const char* labelEnd = reinterpret_cast<const char*>(filePtr + nextOffset);
+                    auto labelStart = reinterpret_cast<const char*>(attachment + 4);
+                    auto labelEnd = reinterpret_cast<const char*>(filePtr + nextOffset);
                     const char* terminator = std::find(labelStart, labelEnd, '\0');
                     entry.label.assign(labelStart, terminator);
                 }

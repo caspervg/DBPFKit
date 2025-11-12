@@ -4,6 +4,8 @@
 #include <span>
 #include <vector>
 
+#include "ParseTypes.h"
+
 #define QFS_DEBUG true
 
 namespace QFS {
@@ -13,13 +15,13 @@ namespace QFS {
 
     class Decompressor {
     public:
-        static bool Decompress(std::span<const uint8_t> input, std::vector<uint8_t>& output);
+        static ParseExpected<size_t> Decompress(std::span<const uint8_t> input, std::vector<uint8_t>& output);
         static bool IsQFSCompressed(std::span<const uint8_t> buffer);
         static uint32_t GetUncompressedSize(std::span<const uint8_t> buffer);
 
     private:
-        static bool DecompressInternal(const uint8_t* input, size_t inputSize,
-                                       uint8_t* output, size_t outputSize);
+        static ParseExpected<void> DecompressInternal(const uint8_t* input, size_t inputSize,
+                                                      uint8_t* output, size_t outputSize);
     };
 
 } // namespace QFS

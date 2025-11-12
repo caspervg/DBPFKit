@@ -15,6 +15,7 @@
 namespace FSH { struct File; }
 namespace S3D { struct Model; }
 namespace Exemplar { struct Record; }
+namespace LText { struct Record; }
 
 namespace DBPF {
     struct TgiHash;
@@ -62,6 +63,10 @@ namespace DBPF {
         [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const Tgi& tgi) const;
         [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const TgiMask& mask) const;
         [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(std::string_view label) const;
+        [[nodiscard]] ParseExpected<LText::Record> LoadLText(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<LText::Record> LoadLText(const Tgi& tgi) const;
+        [[nodiscard]] ParseExpected<LText::Record> LoadLText(const TgiMask& mask) const;
+        [[nodiscard]] ParseExpected<LText::Record> LoadLText(std::string_view label) const;
 
     private:
         enum class DataSource {

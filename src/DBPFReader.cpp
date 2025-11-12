@@ -6,6 +6,7 @@
 
 #include "ExemplarReader.h"
 #include "FSHReader.h"
+#include "LTextReader.h"
 #include "QFSDecompressor.h"
 #include "S3DReader.h"
 
@@ -136,7 +137,8 @@ namespace DBPF {
 
         if (QFS::Decompressor::IsQFSCompressed(dataSpan)) {
             std::vector<uint8_t> decompressed;
-            if (!QFS::Decompressor::Decompress(dataSpan, decompressed)) {
+            auto result = QFS::Decompressor::Decompress(dataSpan, decompressed);
+            if (!result.has_value()) {
                 return std::nullopt;
             }
             return decompressed;
@@ -316,6 +318,39 @@ namespace DBPF {
             return Fail("No entries found for label {}", label);
         }
         return LoadExemplar(*entries.front());
+    }
+
+    ParseExpected<LText::Record> Reader::LoadLText(const IndexEntry& entry) const {
+        auto payload = ReadEntryData(entry);
+        if (!payload.has_value()) {
+            return Fail("Failed to read entry data for {}", entry.tgi.ToString());
+        }
+        std::span<const uint8_t> buffer(payload->data(), payload->size());
+        return LText::Parse(buffer);
+    }
+
+    ParseExpected<LText::Record> Reader::LoadLText(const Tgi& tgi) const {
+        const IndexEntry* entry = FindEntry(tgi);
+        if (!entry) {
+            return Fail("No entry found for {}", tgi.ToString());
+        }
+        return LoadLText(*entry);
+    }
+
+    ParseExpected<LText::Record> Reader::LoadLText(const TgiMask& mask) const {
+        auto entries = FindEntries(mask);
+        if (entries.empty()) {
+            return Fail("No entry matched the provided mask");
+        }
+        return LoadLText(*entries.front());
+    }
+
+    ParseExpected<LText::Record> Reader::LoadLText(std::string_view label) const {
+        auto entries = FindEntries(label);
+        if (entries.empty()) {
+            return Fail("No entries found for label {}", label);
+        }
+        return LoadLText(*entries.front());
     }
 
     bool Reader::ParseBuffer(std::span<const uint8_t> buffer) {

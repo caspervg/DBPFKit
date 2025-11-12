@@ -54,7 +54,7 @@ Usage notes:
 - `LoadFile(path)` maps the entire DAT into memory and verifies the 0x60-byte header (version `1.0`, index type `7`).
 - `LoadBuffer(data, size)` accepts an in-memory image (useful in tests).
 - `GetIndex()` returns the parsed index entries (`DBPF::IndexEntry`), each with a `Tgi`, file offset, size, and optional `decompressedSize`.
-- `ReadEntryData(entry)` copies the referenced bytes and automatically runs them through the QFS decompressor when needed. If you need raw bytes, test `QFS::Decompressor::IsQFSCompressed` yourself before calling `Decompress`.
+- `ReadEntryData(entry)` copies the referenced bytes and automatically runs them through the QFS decompressor when needed. If you need raw bytes, test `QFS::Decompressor::IsQFSCompressed` yourself before calling `Decompress` and handle the returned `ParseExpected` accordingly.
 - Directory metadata is applied automatically when an entry with `DBPF::kDirectoryTgi` exists; the `decompressedSize` field is filled for matching entries.
 
 ### Convenience lookups
@@ -76,6 +76,10 @@ auto exact = reader.ReadEntryData(DBPF::Tgi{0x6534284A, 0x2821ED93, 0x12345678})
 
 if (auto exemplar = reader.LoadExemplar("Exemplar (Road)")) {
     // exemplar->properties ...
+}
+
+if (auto localized = reader.LoadLText("LText")) {
+    std::println("Localized text: {}", localized->ToUtf8());
 }
 
 auto s3d = reader.LoadS3D(DBPF::Tgi{0x5AD0E817, 0xBADB57F1, 0x00000001});
@@ -117,16 +121,18 @@ These helpers are self-contained; add more catalog entries by editing `src/TGI.c
 
 std::vector<uint8_t> decompressed;
 std::span<const uint8_t> rawSpan(raw.data(), raw.size());
-if (QFS::Decompressor::Decompress(rawSpan, decompressed)) {
-    // decompressed now holds the inflated bytes
+auto qfsResult = QFS::Decompressor::Decompress(rawSpan, decompressed);
+if (!qfsResult) {
+    throw std::runtime_error(qfsResult.error().message);
 }
+// decompressed now holds *qfsResult bytes
 ```
 
 API summary:
 
 - `IsQFSCompressed(std::span<const uint8_t>)` checks the 0x10FB signature and minimum header length.
 - `GetUncompressedSize(std::span<const uint8_t>)` returns the 24-bit size stored in the header (0 if not compressed).
-- `Decompress(std::span<const uint8_t>, std::vector<uint8_t>&)` validates the header, resizes the output vector to the advertised length, and decodes the packcode stream. It supports the optional “chunk flag” header variant and the literal terminator rules described on the SC4Devotion wiki.
+- `Decompress(std::span<const uint8_t>, std::vector<uint8_t>&)` returns `ParseExpected<size_t>`: on success you get the decoded byte count (and the vector is filled); on failure you get a descriptive `ParseError`. The decoder supports the optional “chunk flag” header variant and the literal terminator rules described on the SC4Devotion wiki.
 
 If you need more control (e.g., to stream into a preallocated buffer) you can call `DecompressInternal` directly, but the vector-based helper is usually sufficient.
 
@@ -306,6 +312,24 @@ for (const auto& prop : exemplar.properties) {
 
 The parser mirrors scdbpf’s implementation: it handles binary EQZB/CQZB headers, property IDs/types, lists vs. scalars, and exposes a human-friendly `Property::ToString()` (hex + decimal for numeric fields). Text exemplars (`EQZT/CQZT`) follow the same grammar (see `examples/dat/file_dec*.eqz`) and are parsed transparently alongside the binary form.
 All exemplar/FSH/S3D readers return `std::expected<..., ParseError>` so you can bubble the message up or transform it into UI feedback.
+
+## LText Parser
+
+**Headers:** `LTextReader.h`
+
+```cpp
+#include "LTextReader.h"
+
+auto payload = reader.ReadEntryData(entry);                // type 0x2026960B
+std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
+auto text = LText::Parse(payloadSpan);
+if (!text) {
+    throw std::runtime_error(text.error().message);
+}
+std::println("LText UTF-8: {}", text->ToUtf8());
+```
+
+`LText::Record` stores the UTF-16 data (`std::u16string`) and exposes `ToUtf8()` so you can surface localized menu strings in logs or UIs without wrestling with encoding. If SimCity packs plain ASCII/UTF-8 text without the usual 0x1000 control marker, the parser will gracefully fall back to decoding the raw bytes.
 
 ## Extending / Integrating
 

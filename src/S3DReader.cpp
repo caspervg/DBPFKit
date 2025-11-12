@@ -6,41 +6,46 @@
 
 namespace S3D {
 
-    ParseExpected<Model> Reader::Parse(std::span<const uint8_t> buffer) {
-        auto fail = [](std::string message) -> ParseExpected<Model> {
-            return std::unexpected(MakeParseError(std::move(message)));
-        };
+    constexpr auto kMagic = "3DMD";
+    constexpr auto kVersion = "1.5";
+    constexpr auto kMagicHead = "HEAD";
+    constexpr auto kMagicVert = "VERT";
+    constexpr auto kMagicIndx = "INDX";
+    constexpr auto kMagicPrim = "PRIM";
+    constexpr auto kMagicMats = "MATS";
+    constexpr auto kMagicAnim = "ANIM";
 
+    ParseExpected<Model> Reader::Parse(std::span<const uint8_t> buffer) {
         if (buffer.size() < 12) {
-            return fail("S3D buffer too small");
+            return Fail("S3D buffer too small");
         }
 
         const uint8_t* ptr = buffer.data();
         const uint8_t* end = buffer.data() + buffer.size();
 
-        if (!CheckMagic(ptr, end, "3DMD")) {
-            return fail("missing 3DMD magic");
+        if (!CheckMagic(ptr, end, kMagic)) {
+            return Fail("Missing 3DMD magic");
         }
 
         uint32_t totalLength = 0;
         if (!ReadValue(ptr, end, totalLength)) {
-            return fail("failed to read S3D length");
+            return Fail("Failed to read S3D length");
         }
         (void)totalLength;
 
         Model model;
         if (!ParseHEAD(ptr, end, model))
-            return fail("failed to parse HEAD chunk");
+            return Fail("Failed to parse HEAD chunk");
         if (!ParseVERT(ptr, end, model))
-            return fail("failed to parse VERT chunk");
+            return Fail("Failed to parse VERT chunk");
         if (!ParseINDX(ptr, end, model))
-            return fail("failed to parse INDX chunk");
+            return Fail("Failed to parse INDX chunk");
         if (!ParsePRIM(ptr, end, model))
-            return fail("failed to parse PRIM chunk");
+            return Fail("Failed to parse PRIM chunk");
         if (!ParseMATS(ptr, end, model))
-            return fail("failed to parse MATS chunk");
+            return Fail("Failed to parse MATS chunk");
         if (!ParseANIM(ptr, end, model))
-            return fail("failed to parse ANIM chunk");
+            return Fail("Failed to parse ANIM chunk");
 
         if (!model.vertexBuffers.empty()) {
             model.bbMin = model.vertexBuffers[0].bbMin;
@@ -61,7 +66,7 @@ namespace S3D {
     }
 
     bool Reader::ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Model& model) {
-        if (!CheckMagic(ptr, end, "HEAD")) {
+        if (!CheckMagic(ptr, end, kMagicHead)) {
             return false;
         }
 
@@ -82,7 +87,7 @@ namespace S3D {
     }
 
     bool Reader::ParseVERT(const uint8_t*& ptr, const uint8_t* end, Model& model) {
-        if (!CheckMagic(ptr, end, "VERT")) {
+        if (!CheckMagic(ptr, end, kMagicVert)) {
             return false;
         }
 
@@ -165,7 +170,7 @@ namespace S3D {
     }
 
     bool Reader::ParseINDX(const uint8_t*& ptr, const uint8_t* end, Model& model) {
-        if (!CheckMagic(ptr, end, "INDX")) {
+        if (!CheckMagic(ptr, end, kMagicIndx)) {
             return false;
         }
 
@@ -211,7 +216,7 @@ namespace S3D {
     }
 
     bool Reader::ParsePRIM(const uint8_t*& ptr, const uint8_t* end, Model& model) {
-        if (!CheckMagic(ptr, end, "PRIM")) {
+        if (!CheckMagic(ptr, end, kMagicPrim)) {
             return false;
         }
 
@@ -252,7 +257,7 @@ namespace S3D {
     }
 
     bool Reader::ParseMATS(const uint8_t*& ptr, const uint8_t* end, Model& model) {
-        if (!CheckMagic(ptr, end, "MATS")) {
+        if (!CheckMagic(ptr, end, kMagicMats)) {
             return false;
         }
 
@@ -345,7 +350,7 @@ namespace S3D {
     }
 
     bool Reader::ParseANIM(const uint8_t*& ptr, const uint8_t* end, Model& model) {
-        if (!CheckMagic(ptr, end, "ANIM")) {
+        if (!CheckMagic(ptr, end, kMagicAnim)) {
             return false;
         }
 
@@ -516,7 +521,7 @@ namespace S3D {
     }
 
     bool Reader::CheckMagic(const uint8_t*& ptr, const uint8_t* end, const char* expected) {
-        size_t len = std::strlen(expected);
+        const size_t len = std::strlen(expected);
         if (ptr + len > end)
             return false;
         if (std::memcmp(ptr, expected, len) != 0)

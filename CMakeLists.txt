@@ -76,6 +76,7 @@ add_library(SC4RULParserLib STATIC
     src/QFSDecompressor.cpp
     src/ExemplarReader.cpp
     src/ExemplarStructures.cpp
+    src/LTextReader.cpp
     src/DBPFReader.cpp
     src/MappedFile.cpp
     src/S3DReader.cpp

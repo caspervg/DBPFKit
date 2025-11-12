@@ -1,6 +1,7 @@
 #pragma once
 
 #include "S3DStructures.h"
+#include "ParseTypes.h"
 
 #include <cstdint>
 #include <cstring>
@@ -10,7 +11,7 @@ namespace S3D {
 
     class Reader {
     public:
-        static bool Parse(std::span<const uint8_t> buffer, Model& outModel);
+        static ParseExpected<Model> Parse(std::span<const uint8_t> buffer);
 
     private:
         static bool ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Model& model);

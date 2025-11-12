@@ -401,6 +401,38 @@ TEST_CASE("DBPF reader finds entries via masks and catalog labels") {
     REQUIRE(*s3dBytes == std::vector<uint8_t>{'3', 'D', '!'});
 }
 
+TEST_CASE("DBPF typed loaders parse FSH and Exemplar entries") {
+    const DBPF::Tgi fshTgi{0x7AB50E44, 0x0986135E, 0x0000F00D};
+    const DBPF::Tgi exemplarTgi{0x6534284A, 0x2821ED93, 0x12345678};
+
+    auto fshPayload = BuildSimpleFsh();
+    std::vector<std::vector<uint8_t>> properties;
+    properties.push_back(MakeSingleUInt32Property(0x11111111, 0x22222222));
+    auto exemplarPayload = BuildExemplarBuffer(properties);
+
+    const std::vector<TestEntry> entries{
+        TestEntry{fshTgi, fshPayload},
+        TestEntry{exemplarTgi, exemplarPayload},
+    };
+
+    auto buffer = BuildDbpf(entries);
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+
+    auto fshFile = reader.LoadFSH(fshTgi);
+    REQUIRE(fshFile.has_value());
+    CHECK(fshFile->entries.size() == 1);
+
+    auto exemplar = reader.LoadExemplar("Exemplar");
+    REQUIRE(exemplar.has_value());
+    CHECK(exemplar->properties.size() == 1);
+
+    auto missing = reader.LoadExemplar("Nonexistent label");
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().message.find("label") != std::string::npos);
+}
+
 TEST_CASE("Exemplar parser handles single and multi-value properties") {
     std::vector<std::vector<uint8_t>> properties;
     properties.push_back(MakeSingleUInt32Property(0x12345678, 0xCAFEBABE));
@@ -410,22 +442,23 @@ TEST_CASE("Exemplar parser handles single and multi-value properties") {
     auto buffer = BuildExemplarBuffer(properties);
     std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
     auto parsed = Exemplar::Parse(bufferSpan);
-    REQUIRE(parsed.success);
-    REQUIRE(parsed.record.properties.size() == 3);
+    REQUIRE(parsed.has_value());
+    auto record = std::move(parsed).value();
+    REQUIRE(record.properties.size() == 3);
 
-    const auto* uintProp = parsed.record.FindProperty(0x12345678);
+    const auto* uintProp = record.FindProperty(0x12345678);
     REQUIRE(uintProp != nullptr);
     REQUIRE_FALSE(uintProp->isList);
     REQUIRE(std::get<uint32_t>(uintProp->values[0]) == 0xCAFEBABE);
 
-    const auto* floatProp = parsed.record.FindProperty(0x87654321);
+    const auto* floatProp = record.FindProperty(0x87654321);
     REQUIRE(floatProp != nullptr);
     REQUIRE(floatProp->isList);
     REQUIRE(floatProp->values.size() == 2);
     // CHECK(std::get<float>(floatProp->values[0]) == Approx(1.0f));
     // CHECK(std::get<float>(floatProp->values[1]) == Approx(2.5f));
 
-    const auto* stringProp = parsed.record.FindProperty(0x0000DEAD);
+    const auto* stringProp = record.FindProperty(0x0000DEAD);
     REQUIRE(stringProp != nullptr);
     REQUIRE_FALSE(stringProp->isList);
     REQUIRE(std::get<std::string>(stringProp->values[0]) == "Test");
@@ -439,15 +472,16 @@ TEST_CASE("Exemplar parser rejects text exemplars") {
 
     std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
     auto parsed = Exemplar::Parse(bufferSpan);
-    REQUIRE_FALSE(parsed.success);
-    REQUIRE(parsed.errorMessage.find("text") != std::string::npos);
+    REQUIRE_FALSE(parsed.has_value());
+    REQUIRE(parsed.error().message.find("text") != std::string::npos);
 }
 
 TEST_CASE("FSH reader parses simple uncompressed bitmap") {
     auto buffer = BuildSimpleFsh();
     std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
-    FSH::File file;
-    REQUIRE(FSH::Reader::Parse(bufferSpan, file));
+    auto parsed = FSH::Reader::Parse(bufferSpan);
+    REQUIRE(parsed.has_value());
+    auto file = std::move(parsed).value();
     REQUIRE(file.entries.size() == 1);
     REQUIRE(file.entries[0].bitmaps.size() == 1);
     const auto& bmp = file.entries[0].bitmaps[0];
@@ -460,8 +494,9 @@ TEST_CASE("FSH reader parses simple uncompressed bitmap") {
 TEST_CASE("FSH reader converts 32-bit bitmap to RGBA8") {
     auto buffer = BuildSimpleFsh();
     std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
-    FSH::File file;
-    REQUIRE(FSH::Reader::Parse(bufferSpan, file));
+    auto parsed = FSH::Reader::Parse(bufferSpan);
+    REQUIRE(parsed.has_value());
+    auto file = std::move(parsed).value();
     std::vector<uint8_t> rgba;
     REQUIRE(file.entries.size() == 1);
     REQUIRE(file.entries[0].bitmaps.size() == 1);
@@ -479,8 +514,9 @@ TEST_CASE("FSH reader decodes DXT1 bitmap") {
     int height = 0;
     auto buffer = BuildDxtFsh(blocks, width, height);
     std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
-    FSH::File file;
-    REQUIRE(FSH::Reader::Parse(bufferSpan, file));
+    auto parsed = FSH::Reader::Parse(bufferSpan);
+    REQUIRE(parsed.has_value());
+    auto file = std::move(parsed).value();
     REQUIRE(file.entries.size() == 1);
     REQUIRE_FALSE(file.entries[0].bitmaps.empty());
     const auto& bmp = file.entries[0].bitmaps[0];

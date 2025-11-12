@@ -10,6 +10,11 @@
 
 #include "DBPFStructures.h"
 #include "MappedFile.h"
+#include "ParseTypes.h"
+
+namespace FSH { struct File; }
+namespace S3D { struct Model; }
+namespace Exemplar { struct Record; }
 
 namespace DBPF {
     struct TgiHash;
@@ -45,6 +50,18 @@ namespace DBPF {
         [[nodiscard]] std::vector<const IndexEntry*> FindEntries(std::string_view label) const;
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadFirstMatching(const TgiMask& mask) const;
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadFirstMatching(std::string_view label) const;
+        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(const Tgi& tgi) const;
+        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(const TgiMask& mask) const;
+        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(std::string_view label) const;
+        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(const Tgi& tgi) const;
+        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(const TgiMask& mask) const;
+        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(std::string_view label) const;
+        [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const Tgi& tgi) const;
+        [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const TgiMask& mask) const;
+        [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(std::string_view label) const;
 
     private:
         enum class DataSource {

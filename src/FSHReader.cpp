@@ -32,9 +32,13 @@ std::string MakeName(const char name[4]) {
 
 namespace FSH {
 
-bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
+ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
+    auto fail = [](std::string message) -> ParseExpected<File> {
+        return std::unexpected(MakeParseError(std::move(message)));
+    };
+
     if (buffer.size() < sizeof(FileHeader)) {
-        return false;
+        return fail("buffer too small for FSH header");
     }
 
     std::vector<uint8_t> decompressed;
@@ -42,7 +46,7 @@ bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
 
     if (QFS::Decompressor::IsQFSCompressed(buffer)) {
         if (!QFS::Decompressor::Decompress(buffer, decompressed)) {
-            return false;
+            return fail("failed to decompress FSH payload");
         }
         fileSpan = std::span<const uint8_t>(decompressed.data(), decompressed.size());
     }
@@ -53,13 +57,16 @@ bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
     const uint8_t* ptr = filePtr;
     const uint8_t* end = filePtr + fileSize;
 
-    if (!ReadValue(ptr, end, outFile.header.magic)) return false;
-    if (!ReadValue(ptr, end, outFile.header.size)) return false;
-    if (!ReadValue(ptr, end, outFile.header.numEntries)) return false;
-    if (!ReadValue(ptr, end, outFile.header.dirId)) return false;
+    File outFile;
+    if (!ReadValue(ptr, end, outFile.header.magic) ||
+        !ReadValue(ptr, end, outFile.header.size) ||
+        !ReadValue(ptr, end, outFile.header.numEntries) ||
+        !ReadValue(ptr, end, outFile.header.dirId)) {
+        return fail("failed to read FSH header");
+    }
 
     if (!outFile.header.IsValid()) {
-        return false;
+        return fail("invalid FSH header");
     }
 
     struct DirEntryParsed {
@@ -70,8 +77,10 @@ bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
     std::vector<DirEntryParsed> directory(outFile.header.numEntries);
     for (uint32_t i = 0; i < outFile.header.numEntries; ++i) {
         DirectoryEntry dir{};
-        if (!ReadBytes(ptr, end, dir.name, sizeof(dir.name))) return false;
-        if (!ReadValue(ptr, end, dir.offset)) return false;
+        if (!ReadBytes(ptr, end, dir.name, sizeof(dir.name)) ||
+            !ReadValue(ptr, end, dir.offset)) {
+            return fail("failed to read FSH directory entry");
+        }
         directory[i].name = MakeName(dir.name);
         directory[i].offset = dir.offset;
     }
@@ -85,7 +94,7 @@ bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
                                         ? directory[i + 1].offset
                                         : static_cast<uint32_t>(fileSize);
         if (offset >= fileSize || offset >= nextOffset) {
-            return false;
+            return fail("invalid FSH directory offsets");
         }
 
         const uint8_t* entryPtr = filePtr + offset;
@@ -95,26 +104,28 @@ bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
         entry.name = directory[i].name;
 
         uint8_t record = 0;
-        if (!ReadBytes(entryPtr, entryEnd, &record, 1)) return false;
         uint32_t blockSize = 0;
-        if (!ReadUInt24(entryPtr, entryEnd, blockSize)) return false;
+        if (!ReadBytes(entryPtr, entryEnd, &record, 1) ||
+            !ReadUInt24(entryPtr, entryEnd, blockSize)) {
+            return fail("failed to read FSH record header");
+        }
 
         uint16_t width = 0, height = 0;
         uint16_t xCenter = 0, yCenter = 0;
         uint16_t xOffset = 0, yOffset = 0;
-        if (!ReadValue(entryPtr, entryEnd, width)) return false;
-        if (!ReadValue(entryPtr, entryEnd, height)) return false;
-        if (!ReadValue(entryPtr, entryEnd, xCenter)) return false;
-        if (!ReadValue(entryPtr, entryEnd, yCenter)) return false;
-        if (!ReadValue(entryPtr, entryEnd, xOffset)) return false;
-        if (!ReadValue(entryPtr, entryEnd, yOffset)) return false;
+        if (!ReadValue(entryPtr, entryEnd, width) ||
+            !ReadValue(entryPtr, entryEnd, height) ||
+            !ReadValue(entryPtr, entryEnd, xCenter) ||
+            !ReadValue(entryPtr, entryEnd, yCenter) ||
+            !ReadValue(entryPtr, entryEnd, xOffset) ||
+            !ReadValue(entryPtr, entryEnd, yOffset)) {
+            return fail("failed to read FSH record dimensions");
+        }
 
         entry.formatCode = record & 0x7F;
         entry.width = width;
         entry.height = height;
         entry.mipCount = static_cast<uint8_t>((yOffset >> 12) & 0x0F);
-
-        uint8_t* imageDataStart = const_cast<uint8_t*>(entryPtr);
 
         for (uint8_t mip = 0; mip <= entry.mipCount; ++mip) {
             uint16_t mipWidth = static_cast<uint16_t>(std::max<int>(1, width >> mip));
@@ -130,7 +141,7 @@ bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
             bitmap.mipLevel = mip;
             const size_t dataSize = bitmap.ExpectedDataSize();
             if (entryPtr + dataSize > entryEnd) {
-                return false;
+                return fail("bitmap data exceeds entry bounds");
             }
             bitmap.data.assign(entryPtr, entryPtr + dataSize);
             entryPtr += dataSize;
@@ -153,7 +164,7 @@ bool Reader::Parse(std::span<const uint8_t> buffer, File& outFile) {
         outFile.entries.push_back(std::move(entry));
     }
 
-    return true;
+    return outFile;
 }
 
 bool Reader::ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA) {

@@ -5,12 +5,13 @@
 #include <vector>
 
 #include "FSHStructures.h"
+#include "ParseTypes.h"
 
 namespace FSH {
 
 class Reader {
 public:
-    static bool Parse(std::span<const uint8_t> buffer, File& outFile);
+    static ParseExpected<File> Parse(std::span<const uint8_t> buffer);
     static bool ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA);
 
 private:

@@ -48,14 +48,14 @@ ExemplarLoadResult LoadExemplar(const DBPF::Reader& reader,
                  (*payload)[0], (*payload)[1], (*payload)[2], (*payload)[3]);
 
     auto parsed = Exemplar::Parse(payloadSpan);
-    if (!parsed.success) {
-        out.error = parsed.errorMessage.empty()
+    if (!parsed.has_value()) {
+        out.error = parsed.error().message.empty()
             ? "parse failed without message"
-            : parsed.errorMessage;
+            : parsed.error().message;
         return out;
     }
 
-    out.exemplar = std::move(parsed.record);
+    out.exemplar = std::move(parsed).value();
     return out;
 }
 
@@ -181,11 +181,6 @@ auto main() -> int {
 
     auto savedImages = 0;
 
-    auto exemplarEntries = reader.FindEntries("Exemplar");
-    for (const auto& entry : exemplarEntries) {
-        std::println("ExemplarEntry {}: {}", entry->tgi.ToString(), entry->GetSize());
-    }
-
     for (const auto& entry : reader.GetIndex()) {
         if (entry.tgi.type != 0x7AB50E44) {
             continue;
@@ -198,11 +193,12 @@ auto main() -> int {
 
         std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
 
-        FSH::File file;
-        if (!FSH::Reader::Parse(payloadSpan, file)) {
-            std::println("Failed to parse FSH {}", entry.tgi.ToString());
+        auto parsed = FSH::Reader::Parse(payloadSpan);
+        if (!parsed.has_value()) {
+            std::println("Failed to parse FSH {}: {}", entry.tgi.ToString(), parsed.error().message);
             continue;
         }
+        auto file = std::move(parsed).value();
 
         for (const auto& fshEntry : file.entries) {
             for (const auto& bitmap : fshEntry.bitmaps) {
@@ -234,5 +230,18 @@ auto main() -> int {
     }
 
     std::println("Saved {} FSH textures to {}", savedImages, outputDir.string());
+
+
+    auto exemplarEntries = reader.FindEntries("Exemplar");
+    for (const auto& entry : exemplarEntries) {
+        //std::println("ExemplarEntry {}: {}", entry->tgi.ToString(), entry->GetSize());
+        auto [exemplar, error] = LoadExemplar(reader, *entry);
+        if (!exemplar.has_value()) {
+            std::println("Failed to load exemplar: {}", entry->tgi.ToString(), error);
+        } else {
+            std::println("Loaded exemplar: {}", entry->tgi.ToString());
+        }
+    }
+
     return 0;
 }

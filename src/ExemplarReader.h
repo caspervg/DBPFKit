@@ -3,10 +3,10 @@
 #include <span>
 
 #include "ExemplarStructures.h"
+#include "ParseTypes.h"
 
 namespace Exemplar {
 
-    [[nodiscard]] ParseResult Parse(std::span<const uint8_t> buffer);
+    [[nodiscard]] ParseExpected<Record> Parse(std::span<const uint8_t> buffer);
 
 } // namespace Exemplar
-

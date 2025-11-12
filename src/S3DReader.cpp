@@ -2,56 +2,62 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 
 namespace S3D {
 
-    bool Reader::Parse(std::span<const uint8_t> buffer, Model& outModel) {
+    ParseExpected<Model> Reader::Parse(std::span<const uint8_t> buffer) {
+        auto fail = [](std::string message) -> ParseExpected<Model> {
+            return std::unexpected(MakeParseError(std::move(message)));
+        };
+
         if (buffer.size() < 12) {
-            return false;
+            return fail("S3D buffer too small");
         }
 
         const uint8_t* ptr = buffer.data();
         const uint8_t* end = buffer.data() + buffer.size();
 
         if (!CheckMagic(ptr, end, "3DMD")) {
-            return false;
+            return fail("missing 3DMD magic");
         }
 
         uint32_t totalLength = 0;
         if (!ReadValue(ptr, end, totalLength)) {
-            return false;
+            return fail("failed to read S3D length");
         }
         (void)totalLength;
 
-        if (!ParseHEAD(ptr, end, outModel))
-            return false;
-        if (!ParseVERT(ptr, end, outModel))
-            return false;
-        if (!ParseINDX(ptr, end, outModel))
-            return false;
-        if (!ParsePRIM(ptr, end, outModel))
-            return false;
-        if (!ParseMATS(ptr, end, outModel))
-            return false;
-        if (!ParseANIM(ptr, end, outModel))
-            return false;
+        Model model;
+        if (!ParseHEAD(ptr, end, model))
+            return fail("failed to parse HEAD chunk");
+        if (!ParseVERT(ptr, end, model))
+            return fail("failed to parse VERT chunk");
+        if (!ParseINDX(ptr, end, model))
+            return fail("failed to parse INDX chunk");
+        if (!ParsePRIM(ptr, end, model))
+            return fail("failed to parse PRIM chunk");
+        if (!ParseMATS(ptr, end, model))
+            return fail("failed to parse MATS chunk");
+        if (!ParseANIM(ptr, end, model))
+            return fail("failed to parse ANIM chunk");
 
-        if (!outModel.vertexBuffers.empty()) {
-            outModel.bbMin = outModel.vertexBuffers[0].bbMin;
-            outModel.bbMax = outModel.vertexBuffers[0].bbMax;
+        if (!model.vertexBuffers.empty()) {
+            model.bbMin = model.vertexBuffers[0].bbMin;
+            model.bbMax = model.vertexBuffers[0].bbMax;
 
-            for (size_t i = 1; i < outModel.vertexBuffers.size(); ++i) {
-                const auto& vb = outModel.vertexBuffers[i];
-                outModel.bbMin.x = std::min(outModel.bbMin.x, vb.bbMin.x);
-                outModel.bbMin.y = std::min(outModel.bbMin.y, vb.bbMin.y);
-                outModel.bbMin.z = std::min(outModel.bbMin.z, vb.bbMin.z);
-                outModel.bbMax.x = std::max(outModel.bbMax.x, vb.bbMax.x);
-                outModel.bbMax.y = std::max(outModel.bbMax.y, vb.bbMax.y);
-                outModel.bbMax.z = std::max(outModel.bbMax.z, vb.bbMax.z);
+            for (size_t i = 1; i < model.vertexBuffers.size(); ++i) {
+                const auto& vb = model.vertexBuffers[i];
+                model.bbMin.x = std::min(model.bbMin.x, vb.bbMin.x);
+                model.bbMin.y = std::min(model.bbMin.y, vb.bbMin.y);
+                model.bbMin.z = std::min(model.bbMin.z, vb.bbMin.z);
+                model.bbMax.x = std::max(model.bbMax.x, vb.bbMax.x);
+                model.bbMax.y = std::max(model.bbMax.y, vb.bbMax.y);
+                model.bbMax.z = std::max(model.bbMax.z, vb.bbMax.z);
             }
         }
 
-        return true;
+        return model;
     }
 
     bool Reader::ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Model& model) {

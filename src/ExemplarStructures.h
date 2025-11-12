@@ -54,11 +54,4 @@ namespace Exemplar {
         }
     };
 
-    struct ParseResult {
-        Record record;
-        bool success = false;
-        std::string errorMessage;
-    };
-
 } // namespace Exemplar
-

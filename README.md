@@ -73,9 +73,20 @@ for (const DBPF::IndexEntry* entry : reader.FindEntries(fshMask)) {
 auto overlayTextures = reader.FindEntries("FSH (Base/Overlay Texture)");
 auto firstExemplar = reader.ReadFirstMatching("Exemplar");
 auto exact = reader.ReadEntryData(DBPF::Tgi{0x6534284A, 0x2821ED93, 0x12345678});
+
+if (auto exemplar = reader.LoadExemplar("Exemplar (Road)")) {
+    // exemplar->properties ...
+}
+
+auto s3d = reader.LoadS3D(DBPF::Tgi{0x5AD0E817, 0xBADB57F1, 0x00000001});
+if (!s3d) {
+    std::println("S3D failed: {}", s3d.error().message);
+}
 ```
 
 Use whichever path matches your workflow: exact TGIs, `TgiMask` filters, or the catalog strings shown by `DBPF::Describe`.
+
+- `LoadFSH/LoadS3D/LoadExemplar` wrap the lookup + parse sequence and return `std::expected<...>` results so you can jump straight to the decoded data (see snippet above).
 
 ### TGI helpers & labeling
 
@@ -128,8 +139,8 @@ If you need more control (e.g., to stream into a preallocated buffer) you can ca
 
 auto payload = reader.ReadEntryData(entry);                    // DBPF entry with type 0x7AB50E44
 std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
-FSH::File file;
-if (FSH::Reader::Parse(payloadSpan, file)) {
+if (auto fileResult = FSH::Reader::Parse(payloadSpan)) {
+    const auto& file = fileResult.value();
     for (const auto& tex : file.entries) {
         for (const auto& mip : tex.bitmaps) {
             std::vector<uint8_t> rgba;
@@ -138,6 +149,8 @@ if (FSH::Reader::Parse(payloadSpan, file)) {
             }
         }
     }
+} else {
+    std::println("FSH parse failed: {}", fileResult.error().message);
 }
 ```
 
@@ -161,9 +174,11 @@ Highlights:
 std::vector<uint8_t> s3dData = /* load from DBPF entry */;
 S3D::Model model;
 std::span<const uint8_t> s3dSpan(s3dData.data(), s3dData.size());
-if (!S3D::Reader::Parse(s3dSpan, model)) {
-    throw std::runtime_error("invalid S3D");
+auto parsed = S3D::Reader::Parse(s3dSpan);
+if (!parsed) {
+    throw std::runtime_error(parsed.error().message);
 }
+S3D::Model model = std::move(parsed).value();
 
 for (const auto& vb : model.vertexBuffers) {
     // vb.vertices, vb.bbMin/bbMax, etc.
@@ -172,7 +187,7 @@ for (const auto& vb : model.vertexBuffers) {
 
 Highlights:
 
-- `Reader::Parse(std::span<const uint8_t>, Model&)` walks each chunk (`3DMD`, `HEAD`, `VERT`, `INDX`, `PRIM`, `MATS`, `ANIM`). The parser enforces the documented minor versions and vertex formats.
+- `Reader::Parse(std::span<const uint8_t>) -> std::expected<Model, ParseError>` walks each chunk (`3DMD`, `HEAD`, `VERT`, `INDX`, `PRIM`, `MATS`, `ANIM`). The parser enforces the documented minor versions and vertex formats.
 - `Model` aggregates vertex buffers, index buffers, materials, animations, and bounding boxes. See `S3DStructures.h` for detailed field layouts.
 - The reader intentionally keeps parsing logic simple—no implicit OpenGL bindings or GPU resources—so you can adapt the in-memory model to whatever renderer or exporter you need.
 
@@ -237,7 +252,11 @@ int main() {
 
     S3D::Model model;
     std::span<const uint8_t> bytesSpan(bytes->data(), bytes->size());
-    S3D::Reader::Parse(bytesSpan, model);
+    auto parsedModel = S3D::Reader::Parse(bytesSpan);
+    if (!parsedModel) {
+        throw std::runtime_error(parsedModel.error().message);
+    }
+    model = std::move(parsedModel).value();
 
     auto mesh = BuildMesh(model);
     Model rayModel = LoadModelFromMesh(*mesh);
@@ -275,16 +294,18 @@ From here you can extend the renderer with:
 auto payload = reader.ReadEntryData(entry);                // entry.tgi.type == 0x6534284A
 std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
 auto result = Exemplar::Parse(payloadSpan);
-if (result.success) {
-    const auto& exemplar = result.record;
-    std::println("Parent: {}", exemplar.parent.ToString());
-    for (const auto& prop : exemplar.properties) {
-        std::println("  {}", prop.ToString());
-    }
+if (!result) {
+    throw std::runtime_error(result.error().message);
+}
+const auto& exemplar = result.value();
+std::println("Parent: {}", exemplar.parent.ToString());
+for (const auto& prop : exemplar.properties) {
+    std::println("  {}", prop.ToString());
 }
 ```
 
 The parser mirrors scdbpf’s implementation: it handles binary EQZB/CQZB headers, property IDs/types, lists vs. scalars, and exposes a human-friendly `Property::ToString()` (hex + decimal for numeric fields). Text exemplars (`EQZT/CQZT`) are rare and currently rejected—extend `PropertyParser` if you encounter them in the wild.
+All exemplar/FSH/S3D readers return `std::expected<..., ParseError>` so you can bubble the message up or transform it into UI feedback.
 
 ## Extending / Integrating
 

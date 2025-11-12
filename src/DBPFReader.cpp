@@ -1,9 +1,13 @@
 #include "DBPFReader.h"
 
 #include <algorithm>
+#include <format>
 #include <print>
 
+#include "ExemplarReader.h"
+#include "FSHReader.h"
 #include "QFSDecompressor.h"
+#include "S3DReader.h"
 
 namespace {
 
@@ -227,6 +231,111 @@ namespace DBPF {
             return std::nullopt;
         }
         return ReadFirstMatching(*mask);
+    }
+
+    ParseExpected<FSH::File> Reader::LoadFSH(const IndexEntry& entry) const {
+        auto payload = ReadEntryData(entry);
+        if (!payload) {
+            return std::unexpected(MakeParseError(
+                std::format("failed to read data for {}", entry.tgi.ToString())));
+        }
+        return FSH::Reader::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
+    }
+
+    ParseExpected<FSH::File> Reader::LoadFSH(const Tgi& tgi) const {
+        const IndexEntry* entry = FindEntry(tgi);
+        if (!entry) {
+            return std::unexpected(MakeParseError(
+                std::format("no entry found for {}", tgi.ToString())));
+        }
+        return LoadFSH(*entry);
+    }
+
+    ParseExpected<FSH::File> Reader::LoadFSH(const TgiMask& mask) const {
+        auto entries = FindEntries(mask);
+        if (entries.empty()) {
+            return std::unexpected(MakeParseError("no entry matched the provided mask"));
+        }
+        return LoadFSH(*entries.front());
+    }
+
+    ParseExpected<FSH::File> Reader::LoadFSH(std::string_view label) const {
+        auto entries = FindEntries(label);
+        if (entries.empty()) {
+            return std::unexpected(MakeParseError(
+                std::format("no entries found for label {}", label)));
+        }
+        return LoadFSH(*entries.front());
+    }
+
+    ParseExpected<S3D::Model> Reader::LoadS3D(const IndexEntry& entry) const {
+        auto payload = ReadEntryData(entry);
+        if (!payload) {
+            return std::unexpected(MakeParseError(
+                std::format("failed to read data for {}", entry.tgi.ToString())));
+        }
+        return S3D::Reader::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
+    }
+
+    ParseExpected<S3D::Model> Reader::LoadS3D(const Tgi& tgi) const {
+        const IndexEntry* entry = FindEntry(tgi);
+        if (!entry) {
+            return std::unexpected(MakeParseError(
+                std::format("no entry found for {}", tgi.ToString())));
+        }
+        return LoadS3D(*entry);
+    }
+
+    ParseExpected<S3D::Model> Reader::LoadS3D(const TgiMask& mask) const {
+        auto entries = FindEntries(mask);
+        if (entries.empty()) {
+            return std::unexpected(MakeParseError("no entry matched the provided mask"));
+        }
+        return LoadS3D(*entries.front());
+    }
+
+    ParseExpected<S3D::Model> Reader::LoadS3D(std::string_view label) const {
+        auto entries = FindEntries(label);
+        if (entries.empty()) {
+            return std::unexpected(MakeParseError(
+                std::format("no entries found for label {}", label)));
+        }
+        return LoadS3D(*entries.front());
+    }
+
+    ParseExpected<Exemplar::Record> Reader::LoadExemplar(const IndexEntry& entry) const {
+        auto payload = ReadEntryData(entry);
+        if (!payload) {
+            return std::unexpected(MakeParseError(
+                std::format("failed to read data for {}", entry.tgi.ToString())));
+        }
+        return Exemplar::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
+    }
+
+    ParseExpected<Exemplar::Record> Reader::LoadExemplar(const Tgi& tgi) const {
+        const IndexEntry* entry = FindEntry(tgi);
+        if (!entry) {
+            return std::unexpected(MakeParseError(
+                std::format("no entry found for {}", tgi.ToString())));
+        }
+        return LoadExemplar(*entry);
+    }
+
+    ParseExpected<Exemplar::Record> Reader::LoadExemplar(const TgiMask& mask) const {
+        auto entries = FindEntries(mask);
+        if (entries.empty()) {
+            return std::unexpected(MakeParseError("no entry matched the provided mask"));
+        }
+        return LoadExemplar(*entries.front());
+    }
+
+    ParseExpected<Exemplar::Record> Reader::LoadExemplar(std::string_view label) const {
+        auto entries = FindEntries(label);
+        if (entries.empty()) {
+            return std::unexpected(MakeParseError(
+                std::format("no entries found for label {}", label)));
+        }
+        return LoadExemplar(*entries.front());
     }
 
     bool Reader::ParseBuffer(std::span<const uint8_t> buffer) {

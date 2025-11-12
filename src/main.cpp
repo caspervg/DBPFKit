@@ -8,6 +8,7 @@
 #include "DBPFReader.h"
 #include "ExemplarReader.h"
 #include "FSHReader.h"
+#include "LTextReader.h"
 #include "RUL0.h"
 #include "ini.h"
 #include "TGI.h"
@@ -200,12 +201,19 @@ auto main() -> int {
             std::println("Failed to load exemplar: {}", entry->tgi.ToString(), res.error().message);
         } else {
             const auto& exemplar = res.value();
-            std::println("Loaded exemplar: {}", entry->tgi.ToString());
-            if (exemplar.isText) {
-                std::println("  (text exemplar)");
-                std::println("hello");
-                std::println("world");
-            }
+            std::println("Loaded exemplar: {} - text: {}", entry->tgi.ToString(), exemplar.isText);
+
+        }
+    }
+
+    auto ltextEntries = reader.FindEntries("LText");
+    for (const auto& entry : ltextEntries) {
+        const auto res = reader.LoadLText(*entry);
+        if (!res.has_value()) {
+            std::println("Failed to load LText: {}", entry->tgi.ToString(), res.error().message);
+        } else {
+            const auto& ltext = res.value();
+            std::println("Loaded LText: {} - text: {}", entry->tgi.ToString(), ltext.ToUtf8());
         }
     }
 

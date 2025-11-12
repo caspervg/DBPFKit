@@ -107,8 +107,12 @@ namespace LText {
     }
 
     ParseExpected<Record> Parse(std::span<const uint8_t> buffer) {
+        if (buffer.empty()) {
+            return Fail("LText payload is empty");
+        }
         if (buffer.size() < 4) {
-            return Fail("LText payload too small ({} bytes)", buffer.size());
+            // Maybe there is still some data in there that is just raw ASCII instead of proper LText
+            return ParseFallback(buffer);
         }
 
         const uint8_t* data = buffer.data();
@@ -127,7 +131,7 @@ namespace LText {
             if (fallback.has_value()) {
                 return fallback;
             }
-            return Fail("Invalid LText header and fallback failed");
+            return Fail("Invalid LText header and fallback failed: {}", fallback.error().message);
         }
 
         Record record;

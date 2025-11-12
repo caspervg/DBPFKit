@@ -8,7 +8,7 @@
 #include "ParseTypes.h"
 #include "ini.h"
 
-namespace IntersectionOrdering {
+namespace RUL0 {
     // Convert PuzzlePiece to human-readable string representation
     std::string PuzzlePiece::ToString() const {
         std::string result = std::format("Piece 0x{:08X}", id);
@@ -238,7 +238,7 @@ namespace IntersectionOrdering {
     }
 
     int IniHandler(void* user, const char* section, const char* key, const char* value) {
-        auto* data = static_cast<Data*>(user);
+        auto* data = static_cast<Record*>(user);
         const auto secStr = std::string_view(section);
         const auto keyStr = std::string_view(key);
         const auto valStr = std::string_view(value);
@@ -669,7 +669,7 @@ namespace IntersectionOrdering {
     }
 
     // Build navigation indices and apply transformations
-    void BuildNavigationIndices(Data& data) {
+    void BuildNavigationIndices(Record& data) {
         // Create a list of pieces sorted by ID to process them in order
         std::vector<uint32_t> pieceIds;
         pieceIds.reserve(data.puzzlePieces.size());
@@ -704,8 +704,8 @@ namespace IntersectionOrdering {
         }
     }
 
-    ParseExpected<Data> Parse(std::span<const uint8_t> buffer) {
-        Data data;
+    ParseExpected<Record> Parse(std::span<const uint8_t> buffer) {
+        Record data;
         auto text = reinterpret_cast<const char*>(buffer.data());
         const int parseResult = ini_parse_string_length(text, buffer.size(), IniHandler, &data);
         if (parseResult != 0) {

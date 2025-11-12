@@ -82,7 +82,7 @@ struct Entry {
     std::vector<Bitmap> bitmaps;
 };
 
-struct File {
+struct Record {
     FileHeader header;
     std::vector<Entry> entries;
 };

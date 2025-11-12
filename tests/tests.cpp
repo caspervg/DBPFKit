@@ -571,6 +571,24 @@ TEST_CASE("Exemplar parser reports syntax errors in text exemplars") {
     CHECK(parsed.error().message.find("property list") != std::string::npos);
 }
 
+TEST_CASE("Exemplar parser decodes signed hex literals in text exemplars") {
+    const std::string text =
+        "EQZT1###\n"
+        "ParentCohort=Key:{0x00000000,0x00000000,0x00000000}\n"
+        "PropCount=0x00000002\n"
+        "0x27812850:{\"Park Effect\"}=Sint32:2:{0xFFFFFFF6,0x0000000A}\n"
+        "0x27812854:{\"Power\"}=Uint32:0:{0x00000005}\n";
+    std::vector<uint8_t> buffer(text.begin(), text.end());
+    std::span<const uint8_t> span(buffer.data(), buffer.size());
+    auto parsed = Exemplar::Parse(span);
+    REQUIRE(parsed.has_value());
+    const auto* prop = parsed->FindProperty(0x27812850);
+    REQUIRE(prop != nullptr);
+    REQUIRE(prop->values.size() == 2);
+    CHECK(std::get<int32_t>(prop->values[0]) == -10);
+    CHECK(std::get<int32_t>(prop->values[1]) == 10);
+}
+
 TEST_CASE("LText parser decodes UTF-16 payloads") {
     std::u16string text = u"City ";
     text.push_back(static_cast<char16_t>(0xD83D));
@@ -601,6 +619,15 @@ TEST_CASE("LText parser falls back to raw ASCII blobs") {
     CHECK(parsed->ToUtf8() == "Welcome to the RLS Vacation Resort!");
 }
 
+TEST_CASE("LText parser handles tiny ASCII payloads without headers") {
+    const std::string ascii = "Hi";
+    std::vector<uint8_t> buffer(ascii.begin(), ascii.end());
+    std::span<const uint8_t> span(buffer.data(), buffer.size());
+    auto parsed = LText::Parse(span);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed->ToUtf8() == "Hi");
+}
+
 TEST_CASE("RUL0 parser loads minimal ordering data") {
     const std::string text =
         "RotationRing=0x0A5BCF4B\n"
@@ -610,7 +637,7 @@ TEST_CASE("RUL0 parser loads minimal ordering data") {
         "Piece=0.0, 0.0, 0, 0, 0x00000001\n"
         "AutoPlace=1\n";
     std::span<const uint8_t> span(reinterpret_cast<const uint8_t*>(text.data()), text.size());
-    auto parsed = IntersectionOrdering::Parse(span);
+    auto parsed = RUL0::Parse(span);
     REQUIRE(parsed.has_value());
     auto data = std::move(parsed).value();
     CHECK(data.orderings.size() == 1);

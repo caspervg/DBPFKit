@@ -7,7 +7,7 @@
 
 #include "ParseTypes.h"
 
-namespace IntersectionOrdering {
+namespace RUL0 {
 
     constexpr auto kListDelimiter = ',';
 
@@ -198,7 +198,7 @@ namespace IntersectionOrdering {
         std::vector<std::vector<uint32_t>> addTypes;
     };
 
-    struct Data {
+    struct Record {
         std::vector<Ordering> orderings;
         std::unordered_map<uint32_t, PuzzlePiece> puzzlePieces;
         PuzzlePiece* currentPiece = nullptr;
@@ -232,7 +232,7 @@ namespace IntersectionOrdering {
     void ApplyTranslation(PuzzlePiece& piece);
 
     // Main transformation pipeline
-    void BuildNavigationIndices(Data& data);
+    void BuildNavigationIndices(Record& data);
 
-    [[nodiscard]] ParseExpected<Data> Parse(std::span<const uint8_t> buffer);
+    [[nodiscard]] ParseExpected<Record> Parse(std::span<const uint8_t> buffer);
 }

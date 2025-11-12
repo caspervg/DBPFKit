@@ -233,7 +233,7 @@ namespace DBPF {
         return ReadFirstMatching(*mask);
     }
 
-    ParseExpected<FSH::File> Reader::LoadFSH(const IndexEntry& entry) const {
+    ParseExpected<FSH::Record> Reader::LoadFSH(const IndexEntry& entry) const {
         auto payload = ReadEntryData(entry);
         if (!payload) {
             return Fail("failed to read data for {}", entry.tgi.ToString());
@@ -241,7 +241,7 @@ namespace DBPF {
         return FSH::Reader::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
     }
 
-    ParseExpected<FSH::File> Reader::LoadFSH(const Tgi& tgi) const {
+    ParseExpected<FSH::Record> Reader::LoadFSH(const Tgi& tgi) const {
         const IndexEntry* entry = FindEntry(tgi);
         if (!entry) {
             return Fail("No entry found for {}", tgi.ToString());
@@ -249,7 +249,7 @@ namespace DBPF {
         return LoadFSH(*entry);
     }
 
-    ParseExpected<FSH::File> Reader::LoadFSH(const TgiMask& mask) const {
+    ParseExpected<FSH::Record> Reader::LoadFSH(const TgiMask& mask) const {
         const auto entries = FindEntries(mask);
         if (entries.empty()) {
             return Fail("No entry matched the provided mask");
@@ -257,7 +257,7 @@ namespace DBPF {
         return LoadFSH(*entries.front());
     }
 
-    ParseExpected<FSH::File> Reader::LoadFSH(std::string_view label) const {
+    ParseExpected<FSH::Record> Reader::LoadFSH(std::string_view label) const {
         const auto entries = FindEntries(label);
         if (entries.empty()) {
             return Fail("No entries found for label {}", label);
@@ -265,7 +265,7 @@ namespace DBPF {
         return LoadFSH(*entries.front());
     }
 
-    ParseExpected<S3D::Model> Reader::LoadS3D(const IndexEntry& entry) const {
+    ParseExpected<S3D::Record> Reader::LoadS3D(const IndexEntry& entry) const {
         auto payload = ReadEntryData(entry);
         if (!payload) {
             return Fail("Failed to read data for {}", entry.tgi.ToString());
@@ -273,7 +273,7 @@ namespace DBPF {
         return S3D::Reader::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
     }
 
-    ParseExpected<S3D::Model> Reader::LoadS3D(const Tgi& tgi) const {
+    ParseExpected<S3D::Record> Reader::LoadS3D(const Tgi& tgi) const {
         const IndexEntry* entry = FindEntry(tgi);
         if (!entry) {
             return Fail("No entry found for {}", tgi.ToString());
@@ -281,7 +281,7 @@ namespace DBPF {
         return LoadS3D(*entry);
     }
 
-    ParseExpected<S3D::Model> Reader::LoadS3D(const TgiMask& mask) const {
+    ParseExpected<S3D::Record> Reader::LoadS3D(const TgiMask& mask) const {
         auto entries = FindEntries(mask);
         if (entries.empty()) {
             return Fail("no entry matched the provided mask");
@@ -289,7 +289,7 @@ namespace DBPF {
         return LoadS3D(*entries.front());
     }
 
-    ParseExpected<S3D::Model> Reader::LoadS3D(std::string_view label) const {
+    ParseExpected<S3D::Record> Reader::LoadS3D(std::string_view label) const {
         auto entries = FindEntries(label);
         if (entries.empty()) {
             return Fail("No entries found for label {}", label);
@@ -362,16 +362,16 @@ namespace DBPF {
         return LoadLText(*entries.front());
     }
 
-    ParseExpected<IntersectionOrdering::Data> Reader::LoadRUL0(const IndexEntry& entry) const {
+    ParseExpected<RUL0::Record> Reader::LoadRUL0(const IndexEntry& entry) const {
         auto payload = ReadEntryData(entry);
         if (!payload.has_value()) {
             return Fail("Failed to read entry data for {}", entry.tgi.ToString());
         }
-        std::span<const uint8_t> buffer(payload->data(), payload->size());
-        return IntersectionOrdering::Parse(buffer);
+        const std::span<const uint8_t> buffer(payload->data(), payload->size());
+        return RUL0::Parse(buffer);
     }
 
-    ParseExpected<IntersectionOrdering::Data> Reader::LoadRUL0() const {
+    ParseExpected<RUL0::Record> Reader::LoadRUL0() const {
         const auto entry = FindFirstEntry("RUL0 (Intersection Ordering)");
         if (!entry.has_value()) {
             return Fail("No RUL0 (Intersection Ordering) entry found");
@@ -379,7 +379,7 @@ namespace DBPF {
         return LoadRUL0(entry.value());
     }
 
-    bool Reader::ParseBuffer(std::span<const uint8_t> buffer) {
+    bool Reader::ParseBuffer(const std::span<const uint8_t> buffer) {
         mIndex.clear();
         mTGIIndex.clear();
         mTypeIndex.clear();

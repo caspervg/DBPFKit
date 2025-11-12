@@ -11,7 +11,7 @@ namespace FSH {
 
 class Reader {
 public:
-    static ParseExpected<File> Parse(std::span<const uint8_t> buffer);
+    static ParseExpected<Record> Parse(std::span<const uint8_t> buffer);
     static bool ConvertToRGBA8(const Bitmap& bitmap, std::vector<uint8_t>& outRGBA);
 
 private:

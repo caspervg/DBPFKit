@@ -20,7 +20,7 @@ struct PieceView {
     std::string fullDetail;
 };
 
-std::vector<PieceView> BuildPieceViews(const IntersectionOrdering::Data& data) {
+std::vector<PieceView> BuildPieceViews(const RUL0::Record& data) {
     std::vector<PieceView> views;
     views.reserve(data.puzzlePieces.size());
 
@@ -55,14 +55,14 @@ std::string DescribeParseError(int resultCode) {
     }
 }
 
-bool TryLoadData(std::string_view filePath, IntersectionOrdering::Data& data, std::string& errorMessage) {
-    const int result = ini_parse(std::string(filePath).c_str(), IntersectionOrdering::IniHandler, &data);
+bool TryLoadData(std::string_view filePath, RUL0::Record& data, std::string& errorMessage) {
+    const int result = ini_parse(std::string(filePath).c_str(), RUL0::IniHandler, &data);
     if (result < 0) {
         errorMessage = DescribeParseError(result);
         return false;
     }
 
-    IntersectionOrdering::BuildNavigationIndices(data);
+    RUL0::BuildNavigationIndices(data);
     return true;
 }
 
@@ -71,14 +71,14 @@ bool TryLoadData(std::string_view filePath, IntersectionOrdering::Data& data, st
 int main(int argc, char* argv[]) {
     const std::string rul0Path = (argc > 1 ? argv[1] : kDefaultRul0Path);
 
-    IntersectionOrdering::Data data;
+    RUL0::Record data;
     std::string parseError;
     std::vector<PieceView> pieces;
     bool parseSuccess = false;
 
     size_t selectedPiece = 0;
     const auto reload = [&]() {
-        data = IntersectionOrdering::Data{};
+        data = RUL0::Record{};
         parseSuccess = TryLoadData(rul0Path, data, parseError);
         pieces = parseSuccess ? BuildPieceViews(data) : std::vector<PieceView>{};
         selectedPiece = 0;

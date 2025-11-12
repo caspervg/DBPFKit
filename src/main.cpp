@@ -9,6 +9,7 @@
 #include "ExemplarReader.h"
 #include "FSHReader.h"
 #include "LTextReader.h"
+#include "S3DReader.h"
 #include "RUL0.h"
 #include "ini.h"
 #include "TGI.h"
@@ -111,12 +112,12 @@ namespace {
 } // namespace
 
 auto main() -> int {
-    IntersectionOrdering::Data data;
-    if (ini_parse("../examples/rul0/4023_FARR-2-3_Crossings.txt", IntersectionOrdering::IniHandler, &data) < 0) {
+    RUL0::Record data;
+    if (ini_parse("../examples/rul0/4023_FARR-2-3_Crossings.txt", RUL0::IniHandler, &data) < 0) {
         std::println("An error occurred during parsing");
     }
 
-    IntersectionOrdering::BuildNavigationIndices(data);
+    RUL0::BuildNavigationIndices(data);
 
     std::println("Loaded {} puzzle pieces", data.puzzlePieces.size());
     std::println("");
@@ -159,35 +160,6 @@ auto main() -> int {
             std::println("Failed to parse FSH {}: {}", entry.tgi.ToString(), parsed.error().message);
             continue;
         }
-        auto file = std::move(parsed).value();
-
-        for (const auto& fshEntry : file.entries) {
-            for (const auto& bitmap : fshEntry.bitmaps) {
-                std::vector<uint8_t> rgba;
-                if (!FSH::Reader::ConvertToRGBA8(bitmap, rgba)) {
-                    continue;
-                }
-
-                const auto filename = std::format(
-                    "{:08X}_{:02}_{}x{}_mip{}.png",
-                    entry.tgi.instance,
-                    bitmap.code,
-                    bitmap.width,
-                    bitmap.height,
-                    bitmap.mipLevel);
-
-                const auto path = outputDir / filename;
-                std::filesystem::create_directories(path.parent_path());
-
-                if (SavePngViaWic(path, rgba.data(), bitmap.width, bitmap.height)) {
-                    ++savedImages;
-                }
-            }
-        }
-
-        if (savedImages >= 200) {
-            break;
-        }
     }
 
     std::println("Saved {} FSH textures to {}", savedImages, outputDir.string());
@@ -198,11 +170,7 @@ auto main() -> int {
         //std::println("ExemplarEntry {}: {}", entry->tgi.ToString(), entry->GetSize());
         const auto res = reader.LoadExemplar(*entry);
         if (!res.has_value()) {
-            std::println("Failed to load exemplar: {}", entry->tgi.ToString(), res.error().message);
-        } else {
-            const auto& exemplar = res.value();
-            std::println("Loaded exemplar: {} - text: {}", entry->tgi.ToString(), exemplar.isText);
-
+            std::println("Failed to load exemplar {}: {}", entry->tgi.ToString(), res.error().message);
         }
     }
 
@@ -210,11 +178,17 @@ auto main() -> int {
     for (const auto& entry : ltextEntries) {
         const auto res = reader.LoadLText(*entry);
         if (!res.has_value()) {
-            std::println("Failed to load LText: {}", entry->tgi.ToString(), res.error().message);
-        } else {
-            const auto& ltext = res.value();
-            std::println("Loaded LText: {} - text: {}", entry->tgi.ToString(), ltext.ToUtf8());
+            std::println("Failed to load LText {}: {}", entry->tgi.ToString(), res.error().message);
         }
+    }
+
+    auto s3dEntries = reader.FindEntries("S3D");
+    for (const auto& entry : s3dEntries) {
+        const auto res = reader.LoadS3D(*entry);
+        if (!res.has_value()) {
+            std::println("Failed to load S3D {}: {}", entry->tgi.ToString(), res.error().message);
+        }
+        std::println("Loaded S3D {} with {} vertices", entry->tgi.ToString(), res->vertexBuffers.size());
     }
 
     return 0;

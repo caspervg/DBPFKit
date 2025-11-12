@@ -12,11 +12,11 @@
 #include "MappedFile.h"
 #include "ParseTypes.h"
 
-namespace FSH { struct File; }
-namespace S3D { struct Model; }
+namespace FSH { struct Record; }
+namespace S3D { struct Record; }
 namespace Exemplar { struct Record; }
 namespace LText { struct Record; }
-namespace IntersectionOrdering { struct Data; }
+namespace RUL0 { struct Record; }
 
 namespace DBPF {
     struct TgiHash;
@@ -54,14 +54,14 @@ namespace DBPF {
         [[nodiscard]] std::vector<const IndexEntry*> FindEntries(std::string_view label) const;
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadFirstMatching(const TgiMask& mask) const;
         [[nodiscard]] std::optional<std::vector<uint8_t>> ReadFirstMatching(std::string_view label) const;
-        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(const IndexEntry& entry) const;
-        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(const Tgi& tgi) const;
-        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(const TgiMask& mask) const;
-        [[nodiscard]] ParseExpected<FSH::File> LoadFSH(std::string_view label) const;
-        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(const IndexEntry& entry) const;
-        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(const Tgi& tgi) const;
-        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(const TgiMask& mask) const;
-        [[nodiscard]] ParseExpected<S3D::Model> LoadS3D(std::string_view label) const;
+        [[nodiscard]] ParseExpected<FSH::Record> LoadFSH(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<FSH::Record> LoadFSH(const Tgi& tgi) const;
+        [[nodiscard]] ParseExpected<FSH::Record> LoadFSH(const TgiMask& mask) const;
+        [[nodiscard]] ParseExpected<FSH::Record> LoadFSH(std::string_view label) const;
+        [[nodiscard]] ParseExpected<S3D::Record> LoadS3D(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<S3D::Record> LoadS3D(const Tgi& tgi) const;
+        [[nodiscard]] ParseExpected<S3D::Record> LoadS3D(const TgiMask& mask) const;
+        [[nodiscard]] ParseExpected<S3D::Record> LoadS3D(std::string_view label) const;
         [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const IndexEntry& entry) const;
         [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const Tgi& tgi) const;
         [[nodiscard]] ParseExpected<Exemplar::Record> LoadExemplar(const TgiMask& mask) const;
@@ -70,8 +70,8 @@ namespace DBPF {
         [[nodiscard]] ParseExpected<LText::Record> LoadLText(const Tgi& tgi) const;
         [[nodiscard]] ParseExpected<LText::Record> LoadLText(const TgiMask& mask) const;
         [[nodiscard]] ParseExpected<LText::Record> LoadLText(std::string_view label) const;
-        [[nodiscard]] ParseExpected<IntersectionOrdering::Data> LoadRUL0(const IndexEntry& entry) const;
-        [[nodiscard]] ParseExpected<IntersectionOrdering::Data> LoadRUL0() const;
+        [[nodiscard]] ParseExpected<RUL0::Record> LoadRUL0(const IndexEntry& entry) const;
+        [[nodiscard]] ParseExpected<RUL0::Record> LoadRUL0() const;
 
     private:
         enum class DataSource {

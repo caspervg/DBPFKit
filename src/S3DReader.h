@@ -11,15 +11,15 @@ namespace S3D {
 
     class Reader {
     public:
-        static ParseExpected<Model> Parse(std::span<const uint8_t> buffer);
+        static ParseExpected<Record> Parse(std::span<const uint8_t> buffer);
 
     private:
-        static bool ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Model& model);
-        static bool ParseVERT(const uint8_t*& ptr, const uint8_t* end, Model& model);
-        static bool ParseINDX(const uint8_t*& ptr, const uint8_t* end, Model& model);
-        static bool ParsePRIM(const uint8_t*& ptr, const uint8_t* end, Model& model);
-        static bool ParseMATS(const uint8_t*& ptr, const uint8_t* end, Model& model);
-        static bool ParseANIM(const uint8_t*& ptr, const uint8_t* end, Model& model);
+        static bool ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Record& model);
+        static bool ParseVERT(const uint8_t*& ptr, const uint8_t* end, Record& model);
+        static bool ParseINDX(const uint8_t*& ptr, const uint8_t* end, Record& model);
+        static bool ParsePRIM(const uint8_t*& ptr, const uint8_t* end, Record& model);
+        static bool ParseMATS(const uint8_t*& ptr, const uint8_t* end, Record& model);
+        static bool ParseANIM(const uint8_t*& ptr, const uint8_t* end, Record& model);
 
         static bool ReadVertex(const uint8_t*& ptr, const uint8_t* end,
                                uint32_t format, uint16_t minorVersion,

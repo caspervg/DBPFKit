@@ -15,7 +15,7 @@ namespace S3D {
     constexpr auto kMagicMats = "MATS";
     constexpr auto kMagicAnim = "ANIM";
 
-    ParseExpected<Model> Reader::Parse(std::span<const uint8_t> buffer) {
+    ParseExpected<Record> Reader::Parse(std::span<const uint8_t> buffer) {
         if (buffer.size() < 12) {
             return Fail("S3D buffer too small");
         }
@@ -33,7 +33,7 @@ namespace S3D {
         }
         (void)totalLength;
 
-        Model model;
+        Record model;
         if (!ParseHEAD(ptr, end, model))
             return Fail("Failed to parse HEAD chunk");
         if (!ParseVERT(ptr, end, model))
@@ -65,7 +65,7 @@ namespace S3D {
         return model;
     }
 
-    bool Reader::ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Model& model) {
+    bool Reader::ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Record& model) {
         if (!CheckMagic(ptr, end, kMagicHead)) {
             return false;
         }
@@ -86,7 +86,7 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParseVERT(const uint8_t*& ptr, const uint8_t* end, Model& model) {
+    bool Reader::ParseVERT(const uint8_t*& ptr, const uint8_t* end, Record& model) {
         if (!CheckMagic(ptr, end, kMagicVert)) {
             return false;
         }
@@ -169,7 +169,7 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParseINDX(const uint8_t*& ptr, const uint8_t* end, Model& model) {
+    bool Reader::ParseINDX(const uint8_t*& ptr, const uint8_t* end, Record& model) {
         if (!CheckMagic(ptr, end, kMagicIndx)) {
             return false;
         }
@@ -215,7 +215,7 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParsePRIM(const uint8_t*& ptr, const uint8_t* end, Model& model) {
+    bool Reader::ParsePRIM(const uint8_t*& ptr, const uint8_t* end, Record& model) {
         if (!CheckMagic(ptr, end, kMagicPrim)) {
             return false;
         }
@@ -256,7 +256,7 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParseMATS(const uint8_t*& ptr, const uint8_t* end, Model& model) {
+    bool Reader::ParseMATS(const uint8_t*& ptr, const uint8_t* end, Record& model) {
         if (!CheckMagic(ptr, end, kMagicMats)) {
             return false;
         }
@@ -349,7 +349,7 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParseANIM(const uint8_t*& ptr, const uint8_t* end, Model& model) {
+    bool Reader::ParseANIM(const uint8_t*& ptr, const uint8_t* end, Record& model) {
         if (!CheckMagic(ptr, end, kMagicAnim)) {
             return false;
         }

@@ -32,7 +32,7 @@ std::string MakeName(const char name[4]) {
 
 namespace FSH {
 
-ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
+ParseExpected<Record> Reader::Parse(std::span<const uint8_t> buffer) {
     if (buffer.size() < sizeof(FileHeader)) {
         return Fail("Buffer too small for FSH header");
     }
@@ -54,7 +54,7 @@ ParseExpected<File> Reader::Parse(std::span<const uint8_t> buffer) {
     const uint8_t* ptr = filePtr;
     const uint8_t* end = filePtr + fileSize;
 
-    File outFile;
+    Record outFile;
     if (!ReadValue(ptr, end, outFile.header.magic) ||
         !ReadValue(ptr, end, outFile.header.size) ||
         !ReadValue(ptr, end, outFile.header.numEntries) ||

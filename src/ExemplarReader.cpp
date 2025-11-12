@@ -135,7 +135,7 @@ namespace {
         const bool isExemplar = sig[0] == 'E';
         info.isText = sig[3] == 'T';
         const bool isBinary = sig[3] == 'B';
-        const bool versionOk = sig[4] == '1';
+        const bool versionOk = sig[4] == '1' || sig[4] == '#'; // There are a few cases where the version is not filled and instead has #
         const bool suffixOk = sig[5] == '#' && sig[6] == '#' && sig[7] == '#';
 
         info.isValid = (isBinary || info.isText) && versionOk && suffixOk && (info.isCohort || isExemplar);
@@ -354,7 +354,9 @@ namespace {
         return lower;
     }
 
-    ParseExpected<int64_t> ParseIntegerLiteral(TextCursor& cursor) {
+    ParseExpected<int64_t> ParseIntegerLiteral(TextCursor& cursor,
+                                               bool interpretHexAsSigned = false,
+                                               int signedBits = 64) {
         SkipWhitespace(cursor);
         if (cursor.AtEnd()) {
             return Fail("Unexpected end of buffer while reading integer literal");
@@ -386,12 +388,35 @@ namespace {
             if (result.ec != std::errc{}) {
                 return Fail("Failed to parse hexadecimal literal");
             }
-            if (negative) {
-                if (value > (uint64_t(1) << 63)) {
-                    return Fail("Hex literal out of int64 range");
+
+            if (interpretHexAsSigned) {
+                if (signedBits < 1 || signedBits > 64) {
+                    return Fail("Invalid signed bit width");
                 }
-                if (value == (uint64_t(1) << 63)) {
-                    return std::numeric_limits<int64_t>::min();
+                int64_t signedValue = 0;
+                if (signedBits < 64) {
+                    const uint64_t limit = uint64_t{1} << signedBits;
+                    if (value >= limit) {
+                        return Fail("Hex literal exceeds {}-bit range", signedBits);
+                    }
+                    const uint64_t signBit = uint64_t{1} << (signedBits - 1);
+                    if (value & signBit) {
+                        signedValue = static_cast<int64_t>(value) - static_cast<int64_t>(limit);
+                    } else {
+                        signedValue = static_cast<int64_t>(value);
+                    }
+                } else {
+                    signedValue = static_cast<int64_t>(value);
+                }
+                if (negative) {
+                    signedValue = -signedValue;
+                }
+                return signedValue;
+            }
+
+            if (negative) {
+                if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+                    return Fail("Hex literal out of int64 range");
                 }
                 return -static_cast<int64_t>(value);
             }
@@ -408,9 +433,9 @@ namespace {
             return Fail("Invalid decimal literal");
         }
 
-        long long value = 0LL;
-        auto result = std::from_chars(literalStart, cursor.ptr, value, 10);
-        if (result.ec != std::errc{}) {
+        auto value = 0LL;
+        auto [ptr, ec] = std::from_chars(literalStart, cursor.ptr, value, 10);
+        if (ec != std::errc{}) {
             return Fail("Failed to parse decimal literal");
         }
         if (negative) {
@@ -469,7 +494,7 @@ namespace {
         }
         auto number = ParseIntegerLiteral(cursor);
         if (!number.has_value()) {
-            return number;
+            return std::unexpected(number.error());
         }
         return *number != 0;
     }
@@ -514,7 +539,7 @@ namespace {
                 return static_cast<uint32_t>(*number);
             }
             case Exemplar::ValueType::SInt32: {
-                auto number = ParseIntegerLiteral(cursor);
+                auto number = ParseIntegerLiteral(cursor, true, 32);
                 if (!number.has_value()) return std::unexpected(number.error());
                 if (*number < std::numeric_limits<int32_t>::min() || *number > std::numeric_limits<int32_t>::max()) {
                     return Fail("SInt32 value out of range");
@@ -522,7 +547,7 @@ namespace {
                 return static_cast<int32_t>(*number);
             }
             case Exemplar::ValueType::SInt64: {
-                auto number = ParseIntegerLiteral(cursor);
+                auto number = ParseIntegerLiteral(cursor, true, 64);
                 if (!number.has_value()) return std::unexpected(number.error());
                 return static_cast<int64_t>(*number);
             }
@@ -749,7 +774,11 @@ namespace {
 
         const std::string_view expectedHeader = info.isCohort ? "CQZT1###" : "EQZT1###";
         if (!ConsumeLiteralCaseInsensitive(cursor, expectedHeader)) {
-            return Fail("Text exemplar header mismatch");
+            // There are a couple of cases where the version is instead replaced by an extra #
+            const std::string_view alternativeHeader = info.isCohort ? "CQZT####" : "EQZT####";
+            if (!ConsumeLiteralCaseInsensitive(cursor, alternativeHeader)) {
+                return Fail("Text exemplar header mismatch");
+            }
         }
 
         Exemplar::Record record{};
@@ -834,7 +863,7 @@ namespace Exemplar {
         const auto& info = infoExpected.value();
 
         if (!info.isValid) {
-            return Fail(("Invalid exemplar signature"));
+            return Fail(("Invalid exemplar signature: " + info.label));
         }
 
         if (info.isText) {

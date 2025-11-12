@@ -104,7 +104,7 @@ namespace S3D {
         std::vector<AnimatedMesh> animatedMeshes;
     };
 
-    struct Model {
+    struct Record {
         uint16_t majorVersion = 0;
         uint16_t minorVersion = 0;
         std::vector<VertexBuffer> vertexBuffers;

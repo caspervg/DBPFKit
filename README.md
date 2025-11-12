@@ -1,14 +1,12 @@
-# dbpf++
+# DBPFKit
 
 C++23 utilities for reading SimCity 4 DBPF archives and the asset formats that live inside them. The library powers the CLI, GUI, and tests in this repo, but it is also designed to be embedded into your own tooling.
 
 ## Highlights
 
 - **DBPF index + I/O** – works from memory buffers or memory-mapped files, understands directory metadata, and resolves catalog labels/TGI masks.
-- **Transparent decompression** – QFS blocks are inflated automatically via `ParseExpected` so callers get real error messages instead of booleans.
+- **Transparent decompression** – QFS blocks are inflated automatically.
 - **Typed loaders** – helpers for Exemplar (binary + text), LText, FSH, S3D, and RUL0 Intersection Ordering records.
-- **Sample fixtures** – `examples/` contains RUL0 snippets, exemplar exports, and DATs for experimentation.
-- **Catch2 coverage** – unit tests exercise every parser; use them as reference implementations when extending the codebase.
 
 ## Building
 
@@ -20,8 +18,6 @@ cmake --build cmake-build-debug
 Targets:
 
 - `SC4RULParserLib` – static library with all loaders.
-- `SC4RULParser` – CLI sample that dumps FSH/LText data.
-- `SC4RULParserGui` – raylib/ImGui front-end (requires desktop deps).
 - `SC4RULParserTests` – Catch2 suite (`ctest --test-dir cmake-build-debug`).
 
 ## Quick Start
@@ -68,7 +64,6 @@ const auto& record = exemplar.value();
 ```
 
 - Supports EQZB/CQZB binaries and EQZT/CQZT text exemplars.
-- Text parser understands the scdbpf grammar, hex literals, signed numbers, bool aliases, and string arrays.
 - Every `Exemplar::Record` exposes `FindProperty`, `GetScalar<T>`, and a `Property::ToString()` helper for logging.
 
 ### LText
@@ -94,8 +89,6 @@ if (!rul) {
     std::println("Pieces: {}", rul->puzzlePieces.size());
 }
 ```
-
-`IntersectionOrdering::Parse` and `reader.LoadRUL0()` feed the existing INI handler, apply `BuildNavigationIndices`, and return the same `Data` structure used by the CLI/GUI.
 
 ### FSH
 
@@ -129,7 +122,7 @@ if (!model) {
 }
 ```
 
-Returns an `S3D::Model` with decoded vertex/index buffers plus metadata for LODs and materials. Pair it with FSH to build meshes or feed the provided GUI.
+Returns an `S3D::Model` with decoded vertex/index buffers plus metadata for LODs and materials. Pair it with FSH to build meshes.
 
 ## Examples & Tests
 

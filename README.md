@@ -304,7 +304,7 @@ for (const auto& prop : exemplar.properties) {
 }
 ```
 
-The parser mirrors scdbpf’s implementation: it handles binary EQZB/CQZB headers, property IDs/types, lists vs. scalars, and exposes a human-friendly `Property::ToString()` (hex + decimal for numeric fields). Text exemplars (`EQZT/CQZT`) are rare and currently rejected—extend `PropertyParser` if you encounter them in the wild.
+The parser mirrors scdbpf’s implementation: it handles binary EQZB/CQZB headers, property IDs/types, lists vs. scalars, and exposes a human-friendly `Property::ToString()` (hex + decimal for numeric fields). Text exemplars (`EQZT/CQZT`) follow the same grammar (see `examples/dat/file_dec*.eqz`) and are parsed transparently alongside the binary form.
 All exemplar/FSH/S3D readers return `std::expected<..., ParseError>` so you can bubble the message up or transform it into UI feedback.
 
 ## Extending / Integrating

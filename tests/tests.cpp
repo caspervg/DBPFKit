@@ -464,16 +464,48 @@ TEST_CASE("Exemplar parser handles single and multi-value properties") {
     REQUIRE(std::get<std::string>(stringProp->values[0]) == "Test");
 }
 
-TEST_CASE("Exemplar parser rejects text exemplars") {
-    std::vector<uint8_t> buffer;
-    const char signature[8] = {'E', 'Q', 'Z', 'T', '1', '#', '#', '#'};
-    buffer.insert(buffer.end(), signature, signature + 8);
-    buffer.resize(24, 0);
+TEST_CASE("Exemplar parser loads text exemplars with scalar and list values") {
+    const std::string text =
+        "EQZT1###\n"
+        "ParentCohort=Key:{0x00000000,0x00000000,0x00000000}\n"
+        "PropCount=0x00000004\n"
+        "0x00000010:{\"Exemplar Type\"}=Uint32:0:{0x0000001E}\n"
+        "0x00000020:{\"Exemplar Name\"}=String:0:{\"SG_Prop_Billboard2\"}\n"
+        "0x27812810:{\"Occupant Size\"}=Float32:3:{10.39999962,7.2249999,2.51600003}\n"
+        "0x4A9F188B:{\"Light\"}=Bool:0:{True}\n";
+    std::vector<uint8_t> buffer(text.begin(), text.end());
+    std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
+    auto parsed = Exemplar::Parse(bufferSpan);
+    REQUIRE(parsed.has_value());
+    const auto record = std::move(parsed).value();
+    CHECK_FALSE(record.isCohort);
+    CHECK(record.properties.size() == 4);
+    const auto* nameProp = record.FindProperty(0x00000020);
+    REQUIRE(nameProp != nullptr);
+    REQUIRE_FALSE(nameProp->isList);
+    CHECK(std::get<std::string>(nameProp->values[0]) == "SG_Prop_Billboard2");
+    const auto* occupant = record.FindProperty(0x27812810);
+    REQUIRE(occupant != nullptr);
+    CHECK(occupant->isList);
+    REQUIRE(occupant->values.size() == 3);
+    CHECK(std::get<float>(occupant->values[0]) == Approx(10.39999962f));
+    const auto* light = record.FindProperty(0x4A9F188B);
+    REQUIRE(light != nullptr);
+    REQUIRE_FALSE(light->isList);
+    CHECK(std::get<bool>(light->values[0]) == true);
+}
 
+TEST_CASE("Exemplar parser reports syntax errors in text exemplars") {
+    const std::string broken =
+        "EQZT1###\n"
+        "ParentCohort=Key:{0x00000000,0x00000000,0x00000000}\n"
+        "PropCount=0x00000001\n"
+        "0x00000010:{\"Exemplar Type\"}=Uint32:0:{0x0000001E\n";
+    std::vector<uint8_t> buffer(broken.begin(), broken.end());
     std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());
     auto parsed = Exemplar::Parse(bufferSpan);
     REQUIRE_FALSE(parsed.has_value());
-    REQUIRE(parsed.error().message.find("text") != std::string::npos);
+    CHECK(parsed.error().message.find("property list") != std::string::npos);
 }
 
 TEST_CASE("FSH reader parses simple uncompressed bitmap") {

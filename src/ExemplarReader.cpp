@@ -1,6 +1,13 @@
 #include "ExemplarReader.h"
 
+#include <array>
+#include <cctype>
+#include <charconv>
 #include <cstring>
+#include <cstdlib>
+#include <format>
+#include <limits>
+#include <string_view>
 
 namespace {
 
@@ -136,7 +143,7 @@ namespace {
         return info;
     }
 
-    ParseExpected<Exemplar::Property> ParseProperty(SpanReader& reader) {
+    ParseExpected<Exemplar::Property> ParseBinaryProperty(SpanReader& reader) {
         if (!reader.CanRead(8)) {
             return Fail("Unexpected end of buffer while reading property header");
         }
@@ -250,11 +257,569 @@ namespace {
         return Fail(std::format("Unsupported property key type: {}", keyType));
     }
 
+    struct TextCursor {
+        const char* ptr = nullptr;
+        const char* end = nullptr;
+
+        [[nodiscard]] bool AtEnd() const { return ptr >= end; }
+        [[nodiscard]] size_t Remaining() const { return static_cast<size_t>(end - ptr); }
+        [[nodiscard]] char Peek() const { return AtEnd() ? '\0' : *ptr; }
+    };
+
+    void SkipWhitespace(TextCursor& cursor) {
+        while (!cursor.AtEnd() && std::isspace(static_cast<unsigned char>(*cursor.ptr))) {
+            ++cursor.ptr;
+        }
+    }
+
+    bool ConsumeLiteralCaseInsensitive(TextCursor& cursor, std::string_view literal) {
+        TextCursor probe = cursor;
+        for (char expected : literal) {
+            if (probe.AtEnd()) {
+                return false;
+            }
+            char actual = *probe.ptr++;
+            if (std::tolower(static_cast<unsigned char>(actual)) != std::tolower(static_cast<unsigned char>(expected))) {
+                return false;
+            }
+        }
+        cursor = probe;
+        return true;
+    }
+
+    bool ConsumeChar(TextCursor& cursor, char ch) {
+        if (cursor.AtEnd() || cursor.Peek() != ch) {
+            return false;
+        }
+        ++cursor.ptr;
+        return true;
+    }
+
+    ParseExpected<void> ExpectChar(TextCursor& cursor, char ch, std::string_view context) {
+        SkipWhitespace(cursor);
+        if (!ConsumeChar(cursor, ch)) {
+            return Fail(std::format("Expected '{}' while parsing {}", ch, context));
+        }
+        return {};
+    }
+
+    ParseExpected<void> ExpectLiteral(TextCursor& cursor, std::string_view literal, std::string_view context) {
+        SkipWhitespace(cursor);
+        if (!ConsumeLiteralCaseInsensitive(cursor, literal)) {
+            return Fail(std::format("Expected {} while parsing {}", literal, context));
+        }
+        return {};
+    }
+
+    ParseExpected<std::string> ParseStringLiteral(TextCursor& cursor) {
+        SkipWhitespace(cursor);
+        if (!ConsumeChar(cursor, '{') || !ConsumeChar(cursor, '"')) {
+            return Fail("String literal must start with {\"");
+        }
+
+        std::string value;
+        value.reserve(32);
+
+        while (!cursor.AtEnd()) {
+            char c = *cursor.ptr;
+            if (c == '"' && cursor.Remaining() >= 2 && cursor.ptr[1] == '}') {
+                cursor.ptr += 2;
+                return value;
+            }
+            value.push_back(c);
+            ++cursor.ptr;
+        }
+
+        return Fail("Unterminated string literal");
+    }
+
+    ParseExpected<std::string> ParseIdentifier(TextCursor& cursor) {
+        SkipWhitespace(cursor);
+        const char* start = cursor.ptr;
+        while (!cursor.AtEnd() && (std::isalpha(static_cast<unsigned char>(cursor.Peek())) || std::isdigit(static_cast<unsigned char>(cursor.Peek())))) {
+            ++cursor.ptr;
+        }
+        if (start == cursor.ptr) {
+            return Fail("Expected identifier");
+        }
+        return std::string(start, static_cast<size_t>(cursor.ptr - start));
+    }
+
+    [[nodiscard]] std::string ToLower(std::string_view text) {
+        std::string lower;
+        lower.reserve(text.size());
+        for (char c : text) {
+            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        return lower;
+    }
+
+    ParseExpected<int64_t> ParseIntegerLiteral(TextCursor& cursor) {
+        SkipWhitespace(cursor);
+        if (cursor.AtEnd()) {
+            return Fail("Unexpected end of buffer while reading integer literal");
+        }
+
+        bool negative = false;
+        if (cursor.Peek() == '-') {
+            negative = true;
+            ++cursor.ptr;
+            if (cursor.AtEnd()) {
+                return Fail("Dangling '-' in integer literal");
+            }
+        }
+
+        bool isHex = false;
+        const char* literalStart = cursor.ptr;
+        if (cursor.Remaining() >= 2 && cursor.ptr[0] == '0' && (cursor.ptr[1] == 'x' || cursor.ptr[1] == 'X')) {
+            isHex = true;
+            cursor.ptr += 2;
+            literalStart = cursor.ptr;
+            while (!cursor.AtEnd() && std::isxdigit(static_cast<unsigned char>(cursor.Peek()))) {
+                ++cursor.ptr;
+            }
+            if (literalStart == cursor.ptr) {
+                return Fail("Invalid hexadecimal literal");
+            }
+            uint64_t value = 0;
+            auto result = std::from_chars(literalStart, cursor.ptr, value, 16);
+            if (result.ec != std::errc{}) {
+                return Fail("Failed to parse hexadecimal literal");
+            }
+            if (negative) {
+                if (value > (uint64_t(1) << 63)) {
+                    return Fail("Hex literal out of int64 range");
+                }
+                if (value == (uint64_t(1) << 63)) {
+                    return std::numeric_limits<int64_t>::min();
+                }
+                return -static_cast<int64_t>(value);
+            }
+            if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+                return Fail("Hex literal out of int64 range");
+            }
+            return static_cast<int64_t>(value);
+        }
+
+        while (!cursor.AtEnd() && std::isdigit(static_cast<unsigned char>(cursor.Peek()))) {
+            ++cursor.ptr;
+        }
+        if (literalStart == cursor.ptr) {
+            return Fail("Invalid decimal literal");
+        }
+
+        long long value = 0LL;
+        auto result = std::from_chars(literalStart, cursor.ptr, value, 10);
+        if (result.ec != std::errc{}) {
+            return Fail("Failed to parse decimal literal");
+        }
+        if (negative) {
+            value = -value;
+        }
+        return static_cast<int64_t>(value);
+    }
+
+    ParseExpected<float> ParseFloatLiteral(TextCursor& cursor) {
+        SkipWhitespace(cursor);
+        if (cursor.AtEnd()) {
+            return Fail("Unexpected end of buffer while reading float literal");
+        }
+        const char* start = cursor.ptr;
+        bool consumed = false;
+        while (!cursor.AtEnd()) {
+            char c = cursor.Peek();
+            if (std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E') {
+                ++cursor.ptr;
+                consumed = true;
+            } else {
+                break;
+            }
+        }
+        if (!consumed) {
+            return Fail("Invalid float literal");
+        }
+        std::string token(start, static_cast<size_t>(cursor.ptr - start));
+        char* endPtr = nullptr;
+        const float value = std::strtof(token.c_str(), &endPtr);
+        if (endPtr == token.c_str() || *endPtr != '\0') {
+            return Fail("Failed to parse float literal");
+        }
+        return value;
+    }
+
+    ParseExpected<bool> ParseBoolLiteral(TextCursor& cursor) {
+        SkipWhitespace(cursor);
+        if (cursor.AtEnd()) {
+            return Fail("Unexpected end of buffer while reading bool literal");
+        }
+        if (std::isalpha(static_cast<unsigned char>(cursor.Peek()))) {
+            const char* start = cursor.ptr;
+            while (!cursor.AtEnd() && std::isalpha(static_cast<unsigned char>(cursor.Peek()))) {
+                ++cursor.ptr;
+            }
+            std::string word(start, static_cast<size_t>(cursor.ptr - start));
+            auto lower = ToLower(word);
+            if (lower == "true") {
+                return true;
+            }
+            if (lower == "false") {
+                return false;
+            }
+            return Fail("Unrecognized bool literal");
+        }
+        auto number = ParseIntegerLiteral(cursor);
+        if (!number.has_value()) {
+            return number;
+        }
+        return *number != 0;
+    }
+
+    std::optional<Exemplar::ValueType> ParseValueTypeToken(const std::string& token) {
+        const auto lower = ToLower(token);
+        if (lower == "uint8") return Exemplar::ValueType::UInt8;
+        if (lower == "uint16") return Exemplar::ValueType::UInt16;
+        if (lower == "uint32") return Exemplar::ValueType::UInt32;
+        if (lower == "sint32") return Exemplar::ValueType::SInt32;
+        if (lower == "sint64") return Exemplar::ValueType::SInt64;
+        if (lower == "float32") return Exemplar::ValueType::Float32;
+        if (lower == "bool") return Exemplar::ValueType::Bool;
+        if (lower == "string") return Exemplar::ValueType::String;
+        return std::nullopt;
+    }
+
+    ParseExpected<Exemplar::ValueVariant> ParseValueVariant(TextCursor& cursor, Exemplar::ValueType type) {
+        switch (type) {
+            case Exemplar::ValueType::UInt8: {
+                auto number = ParseIntegerLiteral(cursor);
+                if (!number.has_value()) return std::unexpected(number.error());
+                if (*number < 0 || *number > std::numeric_limits<uint8_t>::max()) {
+                    return Fail("UInt8 value out of range");
+                }
+                return static_cast<uint8_t>(*number);
+            }
+            case Exemplar::ValueType::UInt16: {
+                auto number = ParseIntegerLiteral(cursor);
+                if (!number.has_value()) return std::unexpected(number.error());
+                if (*number < 0 || *number > std::numeric_limits<uint16_t>::max()) {
+                    return Fail("UInt16 value out of range");
+                }
+                return static_cast<uint16_t>(*number);
+            }
+            case Exemplar::ValueType::UInt32: {
+                auto number = ParseIntegerLiteral(cursor);
+                if (!number.has_value()) return std::unexpected(number.error());
+                if (*number < 0 || *number > std::numeric_limits<uint32_t>::max()) {
+                    return Fail("UInt32 value out of range");
+                }
+                return static_cast<uint32_t>(*number);
+            }
+            case Exemplar::ValueType::SInt32: {
+                auto number = ParseIntegerLiteral(cursor);
+                if (!number.has_value()) return std::unexpected(number.error());
+                if (*number < std::numeric_limits<int32_t>::min() || *number > std::numeric_limits<int32_t>::max()) {
+                    return Fail("SInt32 value out of range");
+                }
+                return static_cast<int32_t>(*number);
+            }
+            case Exemplar::ValueType::SInt64: {
+                auto number = ParseIntegerLiteral(cursor);
+                if (!number.has_value()) return std::unexpected(number.error());
+                return static_cast<int64_t>(*number);
+            }
+            case Exemplar::ValueType::Float32: {
+                auto value = ParseFloatLiteral(cursor);
+                if (!value.has_value()) return std::unexpected(value.error());
+                return *value;
+            }
+            case Exemplar::ValueType::Bool: {
+                auto value = ParseBoolLiteral(cursor);
+                if (!value.has_value()) return std::unexpected(value.error());
+                return *value;
+            }
+            case Exemplar::ValueType::String:
+                return Fail("String values are handled separately");
+        }
+        return Fail("Unsupported value type");
+    }
+
+    void ConsumeOptionalNameKey(TextCursor& cursor) {
+        SkipWhitespace(cursor);
+        const char* start = cursor.ptr;
+        const char* scan = cursor.ptr;
+        while (scan < cursor.end) {
+            char c = *scan;
+            if (c == ':') {
+                if (scan == start) {
+                    break;
+                }
+                cursor.ptr = scan + 1;
+                SkipWhitespace(cursor);
+                return;
+            }
+            if (c == ',' || c == '}' || c == '"') {
+                break;
+            }
+            ++scan;
+        }
+        cursor.ptr = start;
+    }
+
+    ParseExpected<std::vector<Exemplar::ValueVariant>> ParseValueArray(TextCursor& cursor, Exemplar::ValueType type) {
+        std::vector<Exemplar::ValueVariant> values;
+        values.reserve(4);
+
+        if (auto result = ExpectChar(cursor, '{', "property value list"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+
+        while (true) {
+            SkipWhitespace(cursor);
+            if (cursor.AtEnd()) {
+                return Fail("Unexpected end of buffer while reading property list");
+            }
+            if (cursor.Peek() == '}') {
+                ++cursor.ptr;
+                break;
+            }
+            ConsumeOptionalNameKey(cursor);
+            SkipWhitespace(cursor);
+            auto value = ParseValueVariant(cursor, type);
+            if (!value.has_value()) {
+                return std::unexpected(value.error());
+            }
+            values.push_back(std::move(*value));
+            SkipWhitespace(cursor);
+            if (cursor.AtEnd()) {
+                return Fail("Unexpected end of buffer while reading property list");
+            }
+            if (cursor.Peek() == ',') {
+                ++cursor.ptr;
+                continue;
+            }
+            if (cursor.Peek() == '}') {
+                ++cursor.ptr;
+                break;
+            }
+            return Fail("Expected ',' or '}' in property list");
+        }
+
+        return values;
+    }
+
+    ParseExpected<DBPF::Tgi> ParseTextParent(TextCursor& cursor) {
+        if (auto result = ExpectLiteral(cursor, "ParentCohort=Key:", "text exemplar parent block"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+        if (auto result = ExpectChar(cursor, '{', "parent TGI list"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+
+        std::array<int64_t, 3> parts{};
+        for (size_t i = 0; i < parts.size(); ++i) {
+            auto value = ParseIntegerLiteral(cursor);
+            if (!value.has_value()) {
+                return std::unexpected(value.error());
+            }
+            parts[i] = *value;
+            if (i + 1 < parts.size()) {
+                if (auto result = ExpectChar(cursor, ',', "parent TGI separator"); !result.has_value()) {
+                    return std::unexpected(result.error());
+                }
+            }
+        }
+        if (auto result = ExpectChar(cursor, '}', "parent TGI terminator"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+
+        DBPF::Tgi parent{};
+        for (int64_t part : parts) {
+            if (part < 0 || part > std::numeric_limits<uint32_t>::max()) {
+                return Fail("ParentCohort values must be unsigned 32-bit integers");
+            }
+        }
+        parent.group = static_cast<uint32_t>(parts[0]);
+        parent.instance = static_cast<uint32_t>(parts[1]);
+        parent.type = static_cast<uint32_t>(parts[2]);
+        return parent;
+    }
+
+    ParseExpected<uint32_t> ParseTextPropertyCount(TextCursor& cursor) {
+        if (auto result = ExpectLiteral(cursor, "PropCount=", "property count"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+        auto count = ParseIntegerLiteral(cursor);
+        if (!count.has_value()) {
+            return std::unexpected(count.error());
+        }
+        if (*count < 0 || *count > std::numeric_limits<uint32_t>::max()) {
+            return Fail("PropCount out of range");
+        }
+        return static_cast<uint32_t>(*count);
+    }
+
+    ParseExpected<Exemplar::Property> ParseTextProperty(TextCursor& cursor) {
+        auto idValue = ParseIntegerLiteral(cursor);
+        if (!idValue.has_value()) {
+            return std::unexpected(idValue.error());
+        }
+        if (*idValue < 0 || *idValue > std::numeric_limits<uint32_t>::max()) {
+            return Fail("Property id out of range");
+        }
+        if (auto result = ExpectChar(cursor, ':', "property descriptor separator"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+        auto description = ParseStringLiteral(cursor);
+        if (!description.has_value()) {
+            return std::unexpected(description.error());
+        }
+        (void)description;
+
+        if (auto result = ExpectChar(cursor, '=', "property assignment"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+        auto typeToken = ParseIdentifier(cursor);
+        if (!typeToken.has_value()) {
+            return std::unexpected(typeToken.error());
+        }
+        auto type = ParseValueTypeToken(*typeToken);
+        if (!type.has_value()) {
+            return Fail("Unsupported property value type in text exemplar");
+        }
+
+        Exemplar::Property property{};
+        property.id = static_cast<uint32_t>(*idValue);
+        property.type = *type;
+
+        if (auto result = ExpectChar(cursor, ':', "property value prefix"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+
+        if (property.type == Exemplar::ValueType::String) {
+            auto length = ParseIntegerLiteral(cursor);
+            if (!length.has_value()) {
+                return std::unexpected(length.error());
+            }
+            if (*length < 0) {
+                return Fail("String length cannot be negative");
+            }
+            if (auto result = ExpectChar(cursor, ':', "string literal separator"); !result.has_value()) {
+                return std::unexpected(result.error());
+            }
+            auto value = ParseStringLiteral(cursor);
+            if (!value.has_value()) {
+                return std::unexpected(value.error());
+            }
+            property.isList = false;
+            property.values.emplace_back(std::move(*value));
+            return property;
+        }
+
+        auto repetitions = ParseIntegerLiteral(cursor);
+        if (!repetitions.has_value()) {
+            return std::unexpected(repetitions.error());
+        }
+        if (*repetitions < 0) {
+            return Fail("Repetition count cannot be negative");
+        }
+        if (auto result = ExpectChar(cursor, ':', "property list separator"); !result.has_value()) {
+            return std::unexpected(result.error());
+        }
+
+        auto values = ParseValueArray(cursor, property.type);
+        if (!values.has_value()) {
+            return std::unexpected(values.error());
+        }
+        property.values = std::move(*values);
+        const bool isScalar = *repetitions == 0 && property.values.size() == 1;
+        property.isList = !isScalar;
+        return property;
+    }
+
+    ParseExpected<Exemplar::Record> ParseTextExemplar(std::span<const uint8_t> buffer, const SignatureInfo& info) {
+        std::string_view text(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+        if (text.size() >= 3 &&
+            static_cast<unsigned char>(text[0]) == 0xEF &&
+            static_cast<unsigned char>(text[1]) == 0xBB &&
+            static_cast<unsigned char>(text[2]) == 0xBF) {
+            text.remove_prefix(3);
+        }
+
+        TextCursor cursor{text.data(), text.data() + text.size()};
+        SkipWhitespace(cursor);
+
+        const std::string_view expectedHeader = info.isCohort ? "CQZT1###" : "EQZT1###";
+        if (!ConsumeLiteralCaseInsensitive(cursor, expectedHeader)) {
+            return Fail("Text exemplar header mismatch");
+        }
+
+        Exemplar::Record record{};
+        record.isCohort = info.isCohort;
+
+        SkipWhitespace(cursor);
+        auto parent = ParseTextParent(cursor);
+        if (!parent.has_value()) {
+            return std::unexpected(parent.error());
+        }
+        record.parent = *parent;
+
+        SkipWhitespace(cursor);
+        auto declaredCount = ParseTextPropertyCount(cursor);
+        if (!declaredCount.has_value()) {
+            return std::unexpected(declaredCount.error());
+        }
+        const uint32_t expectedCount = *declaredCount;
+        record.properties.reserve(expectedCount);
+
+        SkipWhitespace(cursor);
+        while (!cursor.AtEnd()) {
+            auto property = ParseTextProperty(cursor);
+            if (!property.has_value()) {
+                return std::unexpected(property.error());
+            }
+            record.properties.push_back(std::move(*property));
+            SkipWhitespace(cursor);
+        }
+
+        record.isText = true;
+        return record;
+    }
+
+    ParseExpected<Exemplar::Record> ParseBinaryExemplar(std::span<const uint8_t> buffer, const SignatureInfo& info) {
+        Exemplar::Record record{};
+        record.isCohort = info.isCohort;
+
+        SpanReader reader{buffer.data() + 8, buffer.data() + buffer.size()};
+
+        if (!reader.ReadLE(record.parent.type) ||
+            !reader.ReadLE(record.parent.group) ||
+            !reader.ReadLE(record.parent.instance)) {
+            return Fail(("Failed to read exemplar parent"));
+        }
+
+        uint32_t propertyCount = 0;
+        if (!reader.ReadLE(propertyCount)) {
+            return Fail(("Failed to read property count"));
+        }
+        record.properties.reserve(propertyCount);
+
+        for (uint32_t i = 0; i < propertyCount; ++i) {
+            const auto propertyExpected = ParseBinaryProperty(reader);
+            if (propertyExpected.has_value()) {
+                record.properties.push_back(std::move(propertyExpected.value()));
+            } else {
+                return Fail(std::format("Failed to parse property {}: {}", i, propertyExpected.error().message));
+            }
+        }
+
+        record.isText = false;
+        return record;
+    }
+
 } // namespace
 
 namespace Exemplar {
 
-    ParseExpected<Record> Parse(std::span<const uint8_t> buffer) {
+    ParseExpected<Record> Parse(const std::span<const uint8_t> buffer) {
         if (buffer.size() < kHeaderSize) {
             return Fail("Buffer too small");
         }
@@ -273,36 +838,10 @@ namespace Exemplar {
         }
 
         if (info.isText) {
-            return Fail(("Text exemplars are not supported yet"));
+            return ParseTextExemplar(buffer, info);
         }
 
-        Record record{};
-        record.isCohort = info.isCohort;
-
-        SpanReader reader{data + 8, data + size};
-
-        if (!reader.ReadLE(record.parent.type) ||
-            !reader.ReadLE(record.parent.group) ||
-            !reader.ReadLE(record.parent.instance)) {
-            return Fail(("Failed to read exemplar parent"));
-        }
-
-        uint32_t propertyCount = 0;
-        if (!reader.ReadLE(propertyCount)) {
-            return Fail(("Failed to read property count"));
-        }
-        record.properties.reserve(propertyCount);
-
-        for (uint32_t i = 0; i < propertyCount; ++i) {
-            const auto propertyExpected = ParseProperty(reader);
-            if (propertyExpected.has_value()) {
-                record.properties.push_back(std::move(propertyExpected.value()));
-            } else {
-                return Fail(std::format("Failed to parse property {}: {}", i, propertyExpected.error().message));
-            }
-        }
-
-        return record;
+        return ParseBinaryExemplar(buffer, info);
     }
 
 } // namespace Exemplar

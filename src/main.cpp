@@ -19,46 +19,6 @@
 #    pragma comment(lib, "windowscodecs.lib")
 #endif
 
-struct ExemplarLoadResult {
-    std::optional<Exemplar::Record> exemplar;
-    std::string error;
-};
-
-ExemplarLoadResult LoadExemplar(const DBPF::Reader& reader,
-                                const DBPF::IndexEntry& entry) {
-    ExemplarLoadResult out;
-
-    if (entry.tgi.type != 0x6534284A) {
-        out.error = "not an exemplar TGI";
-        return out;
-    }
-
-    auto payload = reader.ReadEntryData(entry);
-    if (!payload) {
-        out.error = "failed to read payload (offset/size mismatch?)";
-        return out;
-    }
-
-    std::span<const uint8_t> payloadSpan(payload->data(), payload->size());
-
-    std::println("[{}] size={} label={} head={:02X} {:02X} {:02X} {:02X}",
-                 entry.tgi.ToString(),
-                 entry.decompressedSize.value_or(entry.size),
-                 DBPF::Describe(entry.tgi),
-                 (*payload)[0], (*payload)[1], (*payload)[2], (*payload)[3]);
-
-    auto parsed = Exemplar::Parse(payloadSpan);
-    if (!parsed.has_value()) {
-        out.error = parsed.error().message.empty()
-            ? "parse failed without message"
-            : parsed.error().message;
-        return out;
-    }
-
-    out.exemplar = std::move(parsed).value();
-    return out;
-}
-
 namespace {
 
 #ifdef _WIN32
@@ -235,11 +195,17 @@ auto main() -> int {
     auto exemplarEntries = reader.FindEntries("Exemplar");
     for (const auto& entry : exemplarEntries) {
         //std::println("ExemplarEntry {}: {}", entry->tgi.ToString(), entry->GetSize());
-        auto [exemplar, error] = LoadExemplar(reader, *entry);
-        if (!exemplar.has_value()) {
-            std::println("Failed to load exemplar: {}", entry->tgi.ToString(), error);
+        const auto res = reader.LoadExemplar(*entry);
+        if (!res.has_value()) {
+            std::println("Failed to load exemplar: {}", entry->tgi.ToString(), res.error().message);
         } else {
+            const auto& exemplar = res.value();
             std::println("Loaded exemplar: {}", entry->tgi.ToString());
+            if (exemplar.isText) {
+                std::println("  (text exemplar)");
+                std::println("hello");
+                std::println("world");
+            }
         }
     }
 

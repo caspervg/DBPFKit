@@ -124,34 +124,23 @@ namespace DBPF {
         uint32_t chunkHeaderSize = 0;
         uint32_t chunkBodySize = 0;
         if (IsChunkHeader(dataStart, dataSize, chunkHeaderSize, chunkBodySize)) {
-            std::println("[DBPF] Entry {} uses chunk header ({} bytes) body size {}",
-                         entry.tgi.ToString(), chunkHeaderSize, chunkBodySize);
             dataStart += chunkHeaderSize;
             dataSize = chunkBodySize;
         }
 
-        bool aligned = AlignToQfsSignature(dataStart, dataSize);
-        if (aligned) {
-            std::println("[DBPF] Entry {} aligned to QFS signature at new size {}", entry.tgi.ToString(), dataSize);
-        }
+        bool _ = AlignToQfsSignature(dataStart, dataSize);
 
         std::vector data(dataStart, dataStart + dataSize);
 
         std::span<const uint8_t> dataSpan(data.data(), data.size());
 
         if (QFS::Decompressor::IsQFSCompressed(dataSpan)) {
-            std::println("[DBPF] Decompressing entry {} ({} bytes)",
-                         entry.tgi.ToString(), data.size());
             std::vector<uint8_t> decompressed;
             if (!QFS::Decompressor::Decompress(dataSpan, decompressed)) {
-                std::println("[DBPF] QFS decompression failed for {}", entry.tgi.ToString());
                 return std::nullopt;
             }
-            std::println("[DBPF] Entry {} decompressed to {} bytes",
-                         entry.tgi.ToString(), decompressed.size());
             return decompressed;
         }
-        std::println("[DBPF] Entry {} not compressed ({} bytes)", entry.tgi.ToString(), data.size());
         return data;
     }
 
@@ -236,8 +225,7 @@ namespace DBPF {
     ParseExpected<FSH::File> Reader::LoadFSH(const IndexEntry& entry) const {
         auto payload = ReadEntryData(entry);
         if (!payload) {
-            return std::unexpected(MakeParseError(
-                std::format("failed to read data for {}", entry.tgi.ToString())));
+            return Fail("failed to read data for {}", entry.tgi.ToString());
         }
         return FSH::Reader::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
     }
@@ -245,25 +233,23 @@ namespace DBPF {
     ParseExpected<FSH::File> Reader::LoadFSH(const Tgi& tgi) const {
         const IndexEntry* entry = FindEntry(tgi);
         if (!entry) {
-            return std::unexpected(MakeParseError(
-                std::format("no entry found for {}", tgi.ToString())));
+            return Fail("No entry found for {}", tgi.ToString());
         }
         return LoadFSH(*entry);
     }
 
     ParseExpected<FSH::File> Reader::LoadFSH(const TgiMask& mask) const {
-        auto entries = FindEntries(mask);
+        const auto entries = FindEntries(mask);
         if (entries.empty()) {
-            return std::unexpected(MakeParseError("no entry matched the provided mask"));
+            return Fail("No entry matched the provided mask");
         }
         return LoadFSH(*entries.front());
     }
 
     ParseExpected<FSH::File> Reader::LoadFSH(std::string_view label) const {
-        auto entries = FindEntries(label);
+        const auto entries = FindEntries(label);
         if (entries.empty()) {
-            return std::unexpected(MakeParseError(
-                std::format("no entries found for label {}", label)));
+            return Fail("No entries found for label {}", label);
         }
         return LoadFSH(*entries.front());
     }
@@ -271,8 +257,7 @@ namespace DBPF {
     ParseExpected<S3D::Model> Reader::LoadS3D(const IndexEntry& entry) const {
         auto payload = ReadEntryData(entry);
         if (!payload) {
-            return std::unexpected(MakeParseError(
-                std::format("failed to read data for {}", entry.tgi.ToString())));
+            return Fail("Failed to read data for {}", entry.tgi.ToString());
         }
         return S3D::Reader::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
     }
@@ -280,8 +265,7 @@ namespace DBPF {
     ParseExpected<S3D::Model> Reader::LoadS3D(const Tgi& tgi) const {
         const IndexEntry* entry = FindEntry(tgi);
         if (!entry) {
-            return std::unexpected(MakeParseError(
-                std::format("no entry found for {}", tgi.ToString())));
+            return Fail("No entry found for {}", tgi.ToString());
         }
         return LoadS3D(*entry);
     }
@@ -289,7 +273,7 @@ namespace DBPF {
     ParseExpected<S3D::Model> Reader::LoadS3D(const TgiMask& mask) const {
         auto entries = FindEntries(mask);
         if (entries.empty()) {
-            return std::unexpected(MakeParseError("no entry matched the provided mask"));
+            return Fail("no entry matched the provided mask");
         }
         return LoadS3D(*entries.front());
     }
@@ -297,8 +281,7 @@ namespace DBPF {
     ParseExpected<S3D::Model> Reader::LoadS3D(std::string_view label) const {
         auto entries = FindEntries(label);
         if (entries.empty()) {
-            return std::unexpected(MakeParseError(
-                std::format("no entries found for label {}", label)));
+            return Fail("No entries found for label {}", label);
         }
         return LoadS3D(*entries.front());
     }
@@ -306,8 +289,7 @@ namespace DBPF {
     ParseExpected<Exemplar::Record> Reader::LoadExemplar(const IndexEntry& entry) const {
         auto payload = ReadEntryData(entry);
         if (!payload) {
-            return std::unexpected(MakeParseError(
-                std::format("failed to read data for {}", entry.tgi.ToString())));
+            return Fail("Failed to read data for {}", entry.tgi.ToString());
         }
         return Exemplar::Parse(std::span<const uint8_t>(payload->data(), payload->size()));
     }
@@ -315,8 +297,7 @@ namespace DBPF {
     ParseExpected<Exemplar::Record> Reader::LoadExemplar(const Tgi& tgi) const {
         const IndexEntry* entry = FindEntry(tgi);
         if (!entry) {
-            return std::unexpected(MakeParseError(
-                std::format("no entry found for {}", tgi.ToString())));
+            return Fail("No entry found for {}", tgi.ToString());
         }
         return LoadExemplar(*entry);
     }
@@ -324,7 +305,7 @@ namespace DBPF {
     ParseExpected<Exemplar::Record> Reader::LoadExemplar(const TgiMask& mask) const {
         auto entries = FindEntries(mask);
         if (entries.empty()) {
-            return std::unexpected(MakeParseError("no entry matched the provided mask"));
+            return Fail("No entry matched the provided mask");
         }
         return LoadExemplar(*entries.front());
     }
@@ -332,8 +313,7 @@ namespace DBPF {
     ParseExpected<Exemplar::Record> Reader::LoadExemplar(std::string_view label) const {
         auto entries = FindEntries(label);
         if (entries.empty()) {
-            return std::unexpected(MakeParseError(
-                std::format("no entries found for label {}", label)));
+            return Fail("No entries found for label {}", label);
         }
         return LoadExemplar(*entries.front());
     }

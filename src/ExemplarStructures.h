@@ -37,6 +37,7 @@ namespace Exemplar {
     struct Record {
         DBPF::Tgi parent{};
         bool isCohort = false;
+        bool isText = false;
         std::vector<Property> properties;
 
         [[nodiscard]] const Property* FindProperty(uint32_t id) const;

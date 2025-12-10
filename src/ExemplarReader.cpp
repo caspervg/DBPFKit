@@ -9,37 +9,11 @@
 #include <limits>
 #include <string_view>
 
+#include "SafeSpanReader.h"
+
 namespace {
 
     constexpr size_t kHeaderSize = 24;
-
-    struct SpanReader {
-        const uint8_t* ptr = nullptr;
-        const uint8_t* end = nullptr;
-
-        [[nodiscard]] bool CanRead(size_t bytes) const { return ptr + bytes <= end; }
-
-        template<typename T>
-        bool ReadLE(T& out) {
-            if (!CanRead(sizeof(T))) {
-                return false;
-            }
-            T value = 0;
-            std::memcpy(&value, ptr, sizeof(T));
-            out = value;
-            ptr += sizeof(T);
-            return true;
-        }
-
-        bool ReadBytes(size_t length, std::string& out) {
-            if (!CanRead(length)) {
-                return false;
-            }
-            out.assign(reinterpret_cast<const char*>(ptr), length);
-            ptr += length;
-            return true;
-        }
-    };
 
     std::optional<Exemplar::ValueType> ToValueType(uint16_t raw) {
         using Exemplar::ValueType;
@@ -56,64 +30,62 @@ namespace {
         }
     }
 
-    bool ReadValue(SpanReader& reader, Exemplar::ValueType type, Exemplar::ValueVariant& out) {
+    ParseExpected<void> ReadValue(DBPF::SafeSpanReader& reader, Exemplar::ValueType type, Exemplar::ValueVariant& out) {
         switch (type) {
             case Exemplar::ValueType::UInt8: {
-                uint8_t value = 0;
-                if (!reader.ReadLE(value)) return false;
-                out = value;
-                return true;
+                auto value = reader.ReadLE<uint8_t>();
+                if (!value) return std::unexpected(value.error());
+                out = *value;
+                return {};
             }
             case Exemplar::ValueType::UInt16: {
-                uint16_t value = 0;
-                if (!reader.ReadLE(value)) return false;
-                out = value;
-                return true;
+                auto value = reader.ReadLE<uint16_t>();
+                if (!value) return std::unexpected(value.error());
+                out = *value;
+                return {};
             }
             case Exemplar::ValueType::UInt32: {
-                uint32_t value = 0;
-                if (!reader.ReadLE(value)) return false;
-                out = value;
-                return true;
+                auto value = reader.ReadLE<uint32_t>();
+                if (!value) return std::unexpected(value.error());
+                out = *value;
+                return {};
             }
             case Exemplar::ValueType::SInt32: {
-                int32_t value = 0;
-                if (!reader.ReadLE(value)) return false;
-                out = value;
-                return true;
+                auto value = reader.ReadLE<int32_t>();
+                if (!value) return std::unexpected(value.error());
+                out = *value;
+                return {};
             }
             case Exemplar::ValueType::SInt64: {
-                int64_t value = 0;
-                if (!reader.ReadLE(value)) return false;
-                out = value;
-                return true;
+                auto value = reader.ReadLE<int64_t>();
+                if (!value) return std::unexpected(value.error());
+                out = *value;
+                return {};
             }
             case Exemplar::ValueType::Float32: {
-                float value = 0.0f;
-                if (!reader.ReadLE(value)) return false;
-                out = value;
-                return true;
+                auto value = reader.Read<float>();
+                if (!value) return std::unexpected(value.error());
+                out = *value;
+                return {};
             }
             case Exemplar::ValueType::Bool: {
-                uint8_t raw = 0;
-                if (!reader.ReadLE(raw)) return false;
-                out = static_cast<bool>(raw != 0);
-                return true;
+                auto raw = reader.ReadLE<uint8_t>();
+                if (!raw) return std::unexpected(raw.error());
+                out = static_cast<bool>(*raw != 0);
+                return {};
             }
             case Exemplar::ValueType::String: {
-                return false;
+                return Fail("String values should be handled separately");
             }
         }
-        return false;
+        return Fail("Unknown value type");
     }
 
-    bool ReadStringValue(SpanReader& reader, size_t length, Exemplar::ValueVariant& out) {
-        std::string str;
-        if (!reader.ReadBytes(length, str)) {
-            return false;
-        }
-        out = std::move(str);
-        return true;
+    ParseExpected<void> ReadStringValue(DBPF::SafeSpanReader& reader, size_t length, Exemplar::ValueVariant& out) {
+        auto str = reader.ReadString(length);
+        if (!str) return std::unexpected(str.error());
+        out = std::move(*str);
+        return {};
     }
 
     struct SignatureInfo {
@@ -143,118 +115,123 @@ namespace {
         return info;
     }
 
-    ParseExpected<Exemplar::Property> ParseBinaryProperty(SpanReader& reader) {
-        if (!reader.CanRead(8)) {
-            return Fail("Unexpected end of buffer while reading property header");
-        }
-
+    ParseExpected<Exemplar::Property> ParseBinaryProperty(DBPF::SafeSpanReader& reader) {
         Exemplar::Property property{};
 
-        reader.ReadLE(property.id);
-        uint16_t rawValueType = 0;
-        reader.ReadLE(rawValueType);
-        auto type = ToValueType(rawValueType);
+        auto id = reader.ReadLE<uint32_t>();
+        if (!id) return std::unexpected(id.error());
+        property.id = *id;
+
+        auto rawValueType = reader.ReadLE<uint16_t>();
+        if (!rawValueType) return std::unexpected(rawValueType.error());
+        
+        auto type = ToValueType(*rawValueType);
         if (!type) {
             return Fail("Unsupported property value type");
         }
         property.type = *type;
 
-        uint16_t keyType = 0;
-        reader.ReadLE(keyType);
+        auto keyType = reader.ReadLE<uint16_t>();
+        if (!keyType) return std::unexpected(keyType.error());
 
-        if (keyType == 0x0000) {
-            if (!reader.CanRead(1)) {
-                return Fail("Unexpected end of buffer while reading single-value repetition byte");
-            }
-            uint8_t lengthOrFlag = *reader.ptr++;
+        if (*keyType == 0x0000) {
+            auto lengthOrFlag = reader.ReadLE<uint8_t>();
+            if (!lengthOrFlag) return std::unexpected(lengthOrFlag.error());
 
             Exemplar::ValueVariant value;
             if (property.type == Exemplar::ValueType::String) {
-                if (!ReadStringValue(reader, lengthOrFlag, value)) {
-                    return Fail("Failed to read string value");
-                }
+                auto result = ReadStringValue(reader, *lengthOrFlag, value);
+                if (!result) return std::unexpected(result.error());
             } else {
-                if (!ReadValue(reader, property.type, value)) {
-                    return Fail("Failed to read property value");
-                }
+                auto result = ReadValue(reader, property.type, value);
+                if (!result) return std::unexpected(result.error());
             }
             property.isList = false;
             property.values.push_back(std::move(value));
             return property;
         }
 
-        if (keyType == 0x0080) {
-            if (!reader.CanRead(5)) {
-                return Fail("Unexpected end of buffer while reading multi-value header");
-            }
-
-            reader.ptr++; // skip unused flag
-            uint32_t repetitions = 0;
-            reader.ReadLE(repetitions);
+        if (*keyType == 0x0080) {
+            auto skip = reader.Skip(1); // skip unused flag
+            if (!skip) return std::unexpected(skip.error());
+            
+            auto repetitions = reader.ReadLE<uint32_t>();
+            if (!repetitions) return std::unexpected(repetitions.error());
 
             if (property.type == Exemplar::ValueType::String) {
                 Exemplar::ValueVariant value;
-                if (!ReadStringValue(reader, repetitions, value)) {
-                    return Fail("Failed to read multi-string payload");
-                }
+                auto result = ReadStringValue(reader, *repetitions, value);
+                if (!result) return std::unexpected(result.error());
                 property.isList = false;
                 property.values.push_back(std::move(value));
                 return property;
             }
 
             property.isList = true;
-            property.values.reserve(repetitions);
-            for (uint32_t i = 0; i < repetitions; ++i) {
+            property.values.reserve(*repetitions);
+            for (uint32_t i = 0; i < *repetitions; ++i) {
                 Exemplar::ValueVariant value;
-                if (!ReadValue(reader, property.type, value)) {
-                    return Fail("Failed to read list value");
-                }
+                auto result = ReadValue(reader, property.type, value);
+                if (!result) return std::unexpected(result.error());
                 property.values.push_back(std::move(value));
             }
             return property;
         }
 
-        if (keyType == 0x0081) {
-            if (!reader.CanRead(9)) {
-                return Fail("Unexpected end of buffer while reading string-array header");
-            }
-
-            reader.ptr++; // skip unused flag
-            uint32_t totalLength = 0;
-            reader.ReadLE(totalLength);
-            uint32_t entryCount = 0;
-            reader.ReadLE(entryCount);
+        if (*keyType == 0x0081) {
+            auto skip = reader.Skip(1); // skip unused flag
+            if (!skip) return std::unexpected(skip.error());
+            
+            auto totalLength = reader.ReadLE<uint32_t>();
+            if (!totalLength) return std::unexpected(totalLength.error());
+            
+            auto entryCount = reader.ReadLE<uint32_t>();
+            if (!entryCount) return std::unexpected(entryCount.error());
 
             property.isList = true;
-            property.values.reserve(entryCount);
+            property.values.reserve(*entryCount);
 
-            if (!reader.CanRead(totalLength)) {
-                return Fail("Unexpected end of buffer while reading string-array payload");
-            }
+            // Peek at the string array data
+            auto arrayData = reader.PeekBytes(*totalLength);
+            if (!arrayData) return std::unexpected(arrayData.error());
 
-            const uint8_t* offsetPtr = reader.ptr;
-            const uint8_t* stringPtr = reader.ptr + entryCount * 4;
-            if (stringPtr > reader.end || stringPtr + totalLength > reader.end) {
-                return Fail("String-array payload exceeds buffer bounds");
-            }
-
-            for (uint32_t i = 0; i < entryCount; ++i) {
-                uint32_t length = 0;
-                std::memcpy(&length, offsetPtr + i * 4, sizeof(uint32_t));
-                Exemplar::ValueVariant value;
-                SpanReader stringReader{stringPtr, stringPtr + length};
-                if (!ReadStringValue(stringReader, length, value)) {
-                    return Fail("Failed to read string-array entry");
+            // Read string offsets and strings
+            for (uint32_t i = 0; i < *entryCount; ++i) {
+                // Read length from offset table
+                if (i * 4 + 4 > arrayData->size()) {
+                    return Fail("String-array offset table exceeds buffer bounds");
                 }
+                uint32_t length = 0;
+                std::memcpy(&length, arrayData->data() + i * 4, sizeof(uint32_t));
+                
+                // Calculate string data position
+                size_t stringOffset = *entryCount * 4;
+                for (uint32_t j = 0; j < i; ++j) {
+                    uint32_t prevLength = 0;
+                    std::memcpy(&prevLength, arrayData->data() + j * 4, sizeof(uint32_t));
+                    stringOffset += prevLength;
+                }
+                
+                if (stringOffset + length > arrayData->size()) {
+                    return Fail("String-array entry exceeds buffer bounds");
+                }
+                
+                // Create a temporary reader for the string
+                auto stringSpan = arrayData->subspan(stringOffset, length);
+                DBPF::SafeSpanReader stringReader(stringSpan);
+                Exemplar::ValueVariant value;
+                auto result = ReadStringValue(stringReader, length, value);
+                if (!result) return std::unexpected(result.error());
                 property.values.push_back(std::move(value));
-                stringPtr += length;
             }
 
-            reader.ptr += totalLength;
+            // Skip past the string array data
+            auto skipArray = reader.Skip(*totalLength);
+            if (!skipArray) return std::unexpected(skipArray.error());
             return property;
         }
 
-        return Fail(std::format("Unsupported property key type: {}", keyType));
+        return Fail(std::format("Unsupported property key type: {}", *keyType));
     }
 
     struct TextCursor {
@@ -817,27 +794,32 @@ namespace {
         Exemplar::Record record{};
         record.isCohort = info.isCohort;
 
-        SpanReader reader{buffer.data() + 8, buffer.data() + buffer.size()};
+        // Skip the 8-byte header and create reader for the rest
+        DBPF::SafeSpanReader reader(buffer.subspan(8));
 
-        if (!reader.ReadLE(record.parent.type) ||
-            !reader.ReadLE(record.parent.group) ||
-            !reader.ReadLE(record.parent.instance)) {
-            return Fail(("Failed to read exemplar parent"));
-        }
+        auto parentType = reader.ReadLE<uint32_t>();
+        if (!parentType) return std::unexpected(parentType.error());
+        record.parent.type = *parentType;
+        
+        auto parentGroup = reader.ReadLE<uint32_t>();
+        if (!parentGroup) return std::unexpected(parentGroup.error());
+        record.parent.group = *parentGroup;
+        
+        auto parentInstance = reader.ReadLE<uint32_t>();
+        if (!parentInstance) return std::unexpected(parentInstance.error());
+        record.parent.instance = *parentInstance;
 
-        uint32_t propertyCount = 0;
-        if (!reader.ReadLE(propertyCount)) {
-            return Fail(("Failed to read property count"));
-        }
-        record.properties.reserve(propertyCount);
+        auto propertyCount = reader.ReadLE<uint32_t>();
+        if (!propertyCount) return std::unexpected(propertyCount.error());
+        
+        record.properties.reserve(*propertyCount);
 
-        for (uint32_t i = 0; i < propertyCount; ++i) {
-            const auto propertyExpected = ParseBinaryProperty(reader);
-            if (propertyExpected.has_value()) {
-                record.properties.push_back(std::move(propertyExpected.value()));
-            } else {
+        for (uint32_t i = 0; i < *propertyCount; ++i) {
+            auto propertyExpected = ParseBinaryProperty(reader);
+            if (!propertyExpected.has_value()) {
                 return Fail(std::format("Failed to parse property {}: {}", i, propertyExpected.error().message));
             }
+            record.properties.push_back(std::move(*propertyExpected));
         }
 
         record.isText = false;

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <format>
-#include <print>
 
 #include "ExemplarReader.h"
 #include "FSHReader.h"
@@ -115,8 +114,8 @@ namespace DBPF {
     std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const IndexEntry& entry) const {
         EntryData entryData;
         if (!LoadEntryData(entry, entryData)) {
-            std::println("[DBPF] Invalid bounds for entry {} (offset {}, size {})",
-                         entry.tgi.ToString(), entry.offset, entry.size);
+            // std::println("[DBPF] Invalid bounds for entry {} (offset {}, size {})",
+            //              entry.tgi.ToString(), entry.offset, entry.size);
             return std::nullopt;
         }
 

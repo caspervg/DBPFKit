@@ -1,7 +1,8 @@
-#pragma once
-
 #include "RUL0.h"
 
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <format>
 #include <ranges>
 
@@ -152,7 +153,7 @@ namespace RUL0 {
         int rotation, flip; // The game reads these as %i (which can also be octal or hexadecimal format), so we do too
         uint32_t instanceId;
         std::string name;
-        const auto res = sscanf_s(value.data(), "%f, %f, %i, %i, 0x%x", &x, &y, &rotation, &flip, &instanceId);
+        const auto res = sscanf(value.data(), "%f, %f, %i, %i, 0x%x", &x, &y, &rotation, &flip, &instanceId);
         if (res != 5) {
             return false;
         }
@@ -302,7 +303,7 @@ namespace RUL0 {
             else if (keyStr == kReplacementIntersectionKey) {
                 int replRotation;
                 uint32_t replFlip;
-                auto const ret = sscanf_s(value, "%d, %d", &replRotation, &replFlip);
+                auto const ret = sscanf(value, "%d, %d", &replRotation, &replFlip);
                 if (ret != 2) {
                     // Invalid ReplacementIntersection format
                     return 0;
@@ -335,7 +336,7 @@ namespace RUL0 {
                 piece->autoPlace = (std::stoi(value) != 0);
             }
             else if (keyStr == kHandleOffsetKey) {
-                const auto ret = sscanf_s(value,
+                const auto ret = sscanf(value,
                                           "%d, %d",
                                           &piece->handleOffset.deltaStraight,
                                           &piece->handleOffset.deltaSide
@@ -345,7 +346,7 @@ namespace RUL0 {
                 }
             }
             else if (keyStr == kStepOffsetsKey) {
-                const auto ret = sscanf_s(value,
+                const auto ret = sscanf(value,
                                           "%d, %d",
                                           &piece->stepOffsets.dragStartThreshold,
                                           &piece->stepOffsets.dragCompletionOffset
@@ -379,7 +380,7 @@ namespace RUL0 {
             }
             else if (keyStr == kTranslateKey) {
                 // This key is not documented, but present in SC4 game decompilation, so included.
-                sscanf_s(value, "%d, %d", &piece->translate.x, &piece->translate.z);
+                sscanf(value, "%d, %d", &piece->translate.x, &piece->translate.z);
             }
             else {
                 // Malformed RUL0: Unknown key in HighwayIntersectionInfo section

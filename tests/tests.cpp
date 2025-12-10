@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include "DBPFReader.h"
 #include "DBPFStructures.h"
@@ -16,6 +17,7 @@
 #include "QFSDecompressor.h"
 #include "LTextReader.h"
 #include "RUL0.h"
+#include "SafeSpanReader.h"
 #include "squish/squish.h"
 
 namespace {
@@ -551,7 +553,7 @@ TEST_CASE("Exemplar parser loads text exemplars with scalar and list values") {
     REQUIRE(occupant != nullptr);
     CHECK(occupant->isList);
     REQUIRE(occupant->values.size() == 3);
-    CHECK(std::get<float>(occupant->values[0]) == Approx(10.39999962f));
+    CHECK(std::get<float>(occupant->values[0]) == Catch::Approx(10.39999962f));
     const auto* light = record.FindProperty(0x4A9F188B);
     REQUIRE(light != nullptr);
     REQUIRE_FALSE(light->isList);
@@ -696,4 +698,137 @@ TEST_CASE("FSH reader decodes DXT1 bitmap") {
     std::vector<uint8_t> expected(width * height * 4);
     squish::DecompressImage(expected.data(), width, height, blocks.data(), squish::kDxt1);
     REQUIRE(rgba == expected);
+}
+
+TEST_CASE("SafeSpanReader reads integral types in little-endian") {
+    std::vector<uint8_t> buffer{
+        0x12, 0x34, 0x56, 0x78,  // uint32_t: 0x78563412
+        0xAB, 0xCD, 0xEF, 0x01,  // uint32_t: 0x01EFCDAB
+        0xFF, 0x00               // uint16_t: 0x00FF
+    };
+    
+    DBPF::SafeSpanReader reader(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    
+    auto val1 = reader.ReadLE<uint32_t>();
+    REQUIRE(val1.has_value());
+    CHECK(*val1 == 0x78563412);
+    
+    auto val2 = reader.ReadLE<uint32_t>();
+    REQUIRE(val2.has_value());
+    CHECK(*val2 == 0x01EFCDAB);
+    
+    auto val3 = reader.ReadLE<uint16_t>();
+    REQUIRE(val3.has_value());
+    CHECK(*val3 == 0x00FF);
+    
+    CHECK(reader.AtEnd());
+}
+
+TEST_CASE("SafeSpanReader handles bounds checking") {
+    std::vector<uint8_t> buffer{0x01, 0x02, 0x03};
+    DBPF::SafeSpanReader reader(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    
+    // Read one byte successfully
+    auto val1 = reader.ReadLE<uint8_t>();
+    REQUIRE(val1.has_value());
+    CHECK(*val1 == 0x01);
+    
+    // Try to read 4 bytes when only 2 remain
+    auto val2 = reader.ReadLE<uint32_t>();
+    REQUIRE_FALSE(val2.has_value());
+    CHECK(val2.error().message.find("Buffer underrun") != std::string::npos);
+    
+    // Position should not have changed
+    CHECK(reader.Offset() == 1);
+    CHECK(reader.Remaining() == 2);
+}
+
+TEST_CASE("SafeSpanReader reads strings and bytes") {
+    const char* text = "Hello";
+    std::vector<uint8_t> buffer(text, text + 5);
+    buffer.insert(buffer.end(), {0xDE, 0xAD, 0xBE, 0xEF});
+    
+    DBPF::SafeSpanReader reader(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    
+    auto str = reader.ReadString(5);
+    REQUIRE(str.has_value());
+    CHECK(*str == "Hello");
+    
+    std::array<uint8_t, 4> bytes{};
+    auto result = reader.ReadBytes(bytes.data(), 4);
+    REQUIRE(result.has_value());
+    CHECK(bytes[0] == 0xDE);
+    CHECK(bytes[1] == 0xAD);
+    CHECK(bytes[2] == 0xBE);
+    CHECK(bytes[3] == 0xEF);
+}
+
+TEST_CASE("SafeSpanReader skip and seek operations") {
+    std::vector<uint8_t> buffer{0x01, 0x02, 0x03, 0x04, 0x05};
+    DBPF::SafeSpanReader reader(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    
+    // Skip 2 bytes
+    auto skip = reader.Skip(2);
+    REQUIRE(skip.has_value());
+    CHECK(reader.Offset() == 2);
+    
+    // Read after skip
+    auto val = reader.ReadLE<uint8_t>();
+    REQUIRE(val.has_value());
+    CHECK(*val == 0x03);
+    
+    // Seek to position 0
+    auto seek = reader.Seek(0);
+    REQUIRE(seek.has_value());
+    CHECK(reader.Offset() == 0);
+    
+    // Read from beginning
+    auto val2 = reader.ReadLE<uint8_t>();
+    REQUIRE(val2.has_value());
+    CHECK(*val2 == 0x01);
+    
+    // Seek beyond buffer should fail
+    auto badSeek = reader.Seek(100);
+    REQUIRE_FALSE(badSeek.has_value());
+    CHECK(badSeek.error().message.find("Cannot seek") != std::string::npos);
+}
+
+TEST_CASE("SafeSpanReader peek and remaining operations") {
+    std::vector<uint8_t> buffer{0x01, 0x02, 0x03, 0x04};
+    DBPF::SafeSpanReader reader(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    
+    CHECK(reader.CanRead(4));
+    CHECK_FALSE(reader.CanRead(5));
+    
+    auto peek = reader.PeekBytes(2);
+    REQUIRE(peek.has_value());
+    CHECK((*peek)[0] == 0x01);
+    CHECK((*peek)[1] == 0x02);
+    CHECK(reader.Offset() == 0); // Peek doesn't advance
+    
+    auto remaining = reader.RemainingSpan();
+    CHECK(remaining.size() == 4);
+    CHECK(remaining[0] == 0x01);
+    
+    reader.Skip(2);
+    remaining = reader.RemainingSpan();
+    CHECK(remaining.size() == 2);
+    CHECK(remaining[0] == 0x03);
+}
+
+TEST_CASE("SafeSpanReader reads trivially copyable structs") {
+    struct TestStruct {
+        uint8_t a;
+        uint8_t b;
+        uint16_t c;
+    };
+    
+    std::vector<uint8_t> buffer{0x01, 0x02, 0x34, 0x12};
+    DBPF::SafeSpanReader reader(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    
+    auto s = reader.Read<TestStruct>();
+    REQUIRE(s.has_value());
+    CHECK(s->a == 0x01);
+    CHECK(s->b == 0x02);
+    // Note: Read() doesn't do endian conversion, so this is raw bytes
 }

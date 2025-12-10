@@ -1,0 +1,2 @@
+/usr/bin/ar qc libsquish.a CMakeFiles/libsquish_squish.dir/src/alpha.cpp.o CMakeFiles/libsquish_squish.dir/src/clusterfit.cpp.o CMakeFiles/libsquish_squish.dir/src/colourblock.cpp.o CMakeFiles/libsquish_squish.dir/src/colourfit.cpp.o CMakeFiles/libsquish_squish.dir/src/colourset.cpp.o CMakeFiles/libsquish_squish.dir/src/maths.cpp.o CMakeFiles/libsquish_squish.dir/src/rangefit.cpp.o CMakeFiles/libsquish_squish.dir/src/singlecolourfit.cpp.o CMakeFiles/libsquish_squish.dir/src/squish.cpp.o
+/usr/bin/ranlib libsquish.a

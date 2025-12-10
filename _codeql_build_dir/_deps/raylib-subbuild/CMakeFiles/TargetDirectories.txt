@@ -1,0 +1,3 @@
+/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/raylib-subbuild/CMakeFiles/raylib-populate.dir
+/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/raylib-subbuild/CMakeFiles/edit_cache.dir
+/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/raylib-subbuild/CMakeFiles/rebuild_cache.dir

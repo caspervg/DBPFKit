@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/CMakeFiles/libsquish-populate"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/CMakeFiles/libsquish-populate.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/CMakeFiles/libsquish-populate-complete.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-build.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-configure.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-download.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-install.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-patch.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-test.rule"
+		},
+		{
+			"file" : "/home/runner/work/DBPFKit/DBPFKit/_codeql_build_dir/_deps/libsquish-subbuild/libsquish-populate-prefix/src/libsquish-populate-stamp/libsquish-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libsquish-populate"
+		],
+		"name" : "libsquish-populate"
+	}
+}

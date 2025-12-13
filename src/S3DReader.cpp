@@ -3,6 +3,26 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <type_traits>
+
+#include "SafeSpanReader.h"
+
+// Helper macro to simplify reading and error checking for integral types
+#define READ_VALUE(reader, var) \
+    do { \
+        using ValueType = std::remove_reference_t<decltype(var)>; \
+        auto _tmp = reader.ReadLE<ValueType>(); \
+        if (!_tmp) return false; \
+        var = *_tmp; \
+    } while(0)
+
+// Helper macro for reading float types
+#define READ_FLOAT(reader, var) \
+    do { \
+        auto _tmp = reader.Read<float>(); \
+        if (!_tmp) return false; \
+        var = *_tmp; \
+    } while(0)
 
 namespace S3D {
 
@@ -20,31 +40,30 @@ namespace S3D {
             return Fail("S3D buffer too small");
         }
 
-        const uint8_t* ptr = buffer.data();
-        const uint8_t* end = buffer.data() + buffer.size();
+        DBPF::SafeSpanReader reader(buffer);
 
-        if (!CheckMagic(ptr, end, kMagic)) {
+        if (!CheckMagic(reader, kMagic)) {
             return Fail("Missing 3DMD magic");
         }
 
-        uint32_t totalLength = 0;
-        if (!ReadValue(ptr, end, totalLength)) {
+        auto totalLength = reader.ReadLE<uint32_t>();
+        if (!totalLength) {
             return Fail("Failed to read S3D length");
         }
         (void)totalLength;
 
         Record model;
-        if (!ParseHEAD(ptr, end, model))
+        if (!ParseHEAD(reader, model))
             return Fail("Failed to parse HEAD chunk");
-        if (!ParseVERT(ptr, end, model))
+        if (!ParseVERT(reader, model))
             return Fail("Failed to parse VERT chunk");
-        if (!ParseINDX(ptr, end, model))
+        if (!ParseINDX(reader, model))
             return Fail("Failed to parse INDX chunk");
-        if (!ParsePRIM(ptr, end, model))
+        if (!ParsePRIM(reader, model))
             return Fail("Failed to parse PRIM chunk");
-        if (!ParseMATS(ptr, end, model))
+        if (!ParseMATS(reader, model))
             return Fail("Failed to parse MATS chunk");
-        if (!ParseANIM(ptr, end, model))
+        if (!ParseANIM(reader, model))
             return Fail("Failed to parse ANIM chunk");
 
         if (!model.vertexBuffers.empty()) {
@@ -65,19 +84,16 @@ namespace S3D {
         return model;
     }
 
-    bool Reader::ParseHEAD(const uint8_t*& ptr, const uint8_t* end, Record& model) {
-        if (!CheckMagic(ptr, end, kMagicHead)) {
+    bool Reader::ParseHEAD(DBPF::SafeSpanReader& reader, Record& model) {
+        if (!CheckMagic(reader, kMagicHead)) {
             return false;
         }
 
         uint32_t length = 0;
-        if (!ReadValue(ptr, end, length))
-            return false;
+        READ_VALUE(reader, length);
 
-        if (!ReadValue(ptr, end, model.majorVersion))
-            return false;
-        if (!ReadValue(ptr, end, model.minorVersion))
-            return false;
+        READ_VALUE(reader, model.majorVersion);
+        READ_VALUE(reader, model.minorVersion);
 
         if (model.majorVersion != 1 || model.minorVersion < 1 || model.minorVersion > 5) {
             return false;
@@ -86,18 +102,16 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParseVERT(const uint8_t*& ptr, const uint8_t* end, Record& model) {
-        if (!CheckMagic(ptr, end, kMagicVert)) {
+    bool Reader::ParseVERT(DBPF::SafeSpanReader& reader, Record& model) {
+        if (!CheckMagic(reader, kMagicVert)) {
             return false;
         }
 
         uint32_t length = 0;
-        if (!ReadValue(ptr, end, length))
-            return false;
+        READ_VALUE(reader, length);
 
         uint32_t nbrBlocks = 0;
-        if (!ReadValue(ptr, end, nbrBlocks))
-            return false;
+        READ_VALUE(reader, nbrBlocks);
 
         constexpr uint32_t MAX_VERTEX_BUFFERS = 1000;
         if (nbrBlocks > MAX_VERTEX_BUFFERS) {
@@ -109,19 +123,16 @@ namespace S3D {
         for (uint32_t i = 0; i < nbrBlocks; ++i) {
             auto& vb = model.vertexBuffers[i];
 
-            if (!ReadValue(ptr, end, vb.flags))
-                return false;
+            READ_VALUE(reader, vb.flags);
 
             uint16_t count = 0;
-            if (!ReadValue(ptr, end, count))
-                return false;
+            READ_VALUE(reader, count);
 
             uint32_t format = 0;
             uint32_t stride = 0;
 
             if (model.minorVersion >= 4) {
-                if (!ReadValue(ptr, end, format))
-                    return false;
+                READ_VALUE(reader, format);
 
                 uint8_t coordsNb = 0;
                 uint8_t colorsNb = 0;
@@ -132,10 +143,8 @@ namespace S3D {
             else {
                 uint16_t formatShort = 0;
                 uint16_t strideShort = 0;
-                if (!ReadValue(ptr, end, formatShort))
-                    return false;
-                if (!ReadValue(ptr, end, strideShort))
-                    return false;
+                READ_VALUE(reader, formatShort);
+                READ_VALUE(reader, strideShort);
                 format = formatShort;
                 stride = strideShort;
             }
@@ -146,7 +155,7 @@ namespace S3D {
             bool firstVertex = true;
 
             for (uint16_t v = 0; v < count; ++v) {
-                if (!ReadVertex(ptr, end, format, model.minorVersion, stride, vb.vertices[v])) {
+                if (!ReadVertex(reader, format, model.minorVersion, stride, vb.vertices[v])) {
                     return false;
                 }
 
@@ -169,18 +178,16 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParseINDX(const uint8_t*& ptr, const uint8_t* end, Record& model) {
-        if (!CheckMagic(ptr, end, kMagicIndx)) {
+    bool Reader::ParseINDX(DBPF::SafeSpanReader& reader, Record& model) {
+        if (!CheckMagic(reader, kMagicIndx)) {
             return false;
         }
 
         uint32_t length = 0;
-        if (!ReadValue(ptr, end, length))
-            return false;
+        READ_VALUE(reader, length);
 
         uint32_t nbrBlocks = 0;
-        if (!ReadValue(ptr, end, nbrBlocks))
-            return false;
+        READ_VALUE(reader, nbrBlocks);
 
         constexpr uint32_t MAX_INDEX_BUFFERS = 1000;
         if (nbrBlocks > MAX_INDEX_BUFFERS) {
@@ -192,41 +199,34 @@ namespace S3D {
         for (uint32_t i = 0; i < nbrBlocks; ++i) {
             auto& ib = model.indexBuffers[i];
 
-            if (!ReadValue(ptr, end, ib.flags))
-                return false;
+            READ_VALUE(reader, ib.flags);
 
             uint16_t stride = 0;
-            if (!ReadValue(ptr, end, stride))
-                return false;
+            READ_VALUE(reader, stride);
 
             uint16_t count = 0;
-            if (!ReadValue(ptr, end, count))
-                return false;
+            READ_VALUE(reader, count);
 
             ib.indices.resize(count);
 
             for (uint16_t j = 0; j < count; ++j) {
-                if (!ReadValue(ptr, end, ib.indices[j])) {
-                    return false;
-                }
+                READ_VALUE(reader, ib.indices[j]);
             }
         }
 
         return true;
     }
 
-    bool Reader::ParsePRIM(const uint8_t*& ptr, const uint8_t* end, Record& model) {
-        if (!CheckMagic(ptr, end, kMagicPrim)) {
+    bool Reader::ParsePRIM(DBPF::SafeSpanReader& reader, Record& model) {
+        if (!CheckMagic(reader, kMagicPrim)) {
             return false;
         }
 
         uint32_t length = 0;
-        if (!ReadValue(ptr, end, length))
-            return false;
+        READ_VALUE(reader, length);
 
         uint32_t nbrBlocks = 0;
-        if (!ReadValue(ptr, end, nbrBlocks))
-            return false;
+        READ_VALUE(reader, nbrBlocks);
 
         constexpr uint32_t MAX_PRIMITIVE_BLOCKS = 1000;
         if (nbrBlocks > MAX_PRIMITIVE_BLOCKS) {
@@ -237,37 +237,31 @@ namespace S3D {
 
         for (uint32_t i = 0; i < nbrBlocks; ++i) {
             uint16_t nbrPrims = 0;
-            if (!ReadValue(ptr, end, nbrPrims))
-                return false;
+            READ_VALUE(reader, nbrPrims);
 
             model.primitiveBlocks[i].resize(nbrPrims);
 
             for (uint16_t j = 0; j < nbrPrims; ++j) {
                 auto& prim = model.primitiveBlocks[i][j];
-                if (!ReadValue(ptr, end, prim.type))
-                    return false;
-                if (!ReadValue(ptr, end, prim.first))
-                    return false;
-                if (!ReadValue(ptr, end, prim.length))
-                    return false;
+                READ_VALUE(reader, prim.type);
+                READ_VALUE(reader, prim.first);
+                READ_VALUE(reader, prim.length);
             }
         }
 
         return true;
     }
 
-    bool Reader::ParseMATS(const uint8_t*& ptr, const uint8_t* end, Record& model) {
-        if (!CheckMagic(ptr, end, kMagicMats)) {
+    bool Reader::ParseMATS(DBPF::SafeSpanReader& reader, Record& model) {
+        if (!CheckMagic(reader, kMagicMats)) {
             return false;
         }
 
         uint32_t length = 0;
-        if (!ReadValue(ptr, end, length))
-            return false;
+        READ_VALUE(reader, length);
 
         uint32_t nbrBlocks = 0;
-        if (!ReadValue(ptr, end, nbrBlocks))
-            return false;
+        READ_VALUE(reader, nbrBlocks);
 
         constexpr uint32_t MAX_MATERIALS = 1000;
         if (nbrBlocks > MAX_MATERIALS) {
@@ -279,69 +273,52 @@ namespace S3D {
         for (uint32_t i = 0; i < nbrBlocks; ++i) {
             auto& mat = model.materials[i];
 
-            if (!ReadValue(ptr, end, mat.flags))
-                return false;
-            if (!ReadValue(ptr, end, mat.alphaFunc))
-                return false;
-            if (!ReadValue(ptr, end, mat.depthFunc))
-                return false;
-            if (!ReadValue(ptr, end, mat.srcBlend))
-                return false;
-            if (!ReadValue(ptr, end, mat.dstBlend))
-                return false;
+            READ_VALUE(reader, mat.flags);
+            READ_VALUE(reader, mat.alphaFunc);
+            READ_VALUE(reader, mat.depthFunc);
+            READ_VALUE(reader, mat.srcBlend);
+            READ_VALUE(reader, mat.dstBlend);
 
             uint16_t alphaThresholdInt = 0;
-            if (!ReadValue(ptr, end, alphaThresholdInt))
-                return false;
+            READ_VALUE(reader, alphaThresholdInt);
             mat.alphaThreshold = alphaThresholdInt / 65535.0f;
 
-            if (!ReadValue(ptr, end, mat.materialClass))
-                return false;
+            READ_VALUE(reader, mat.materialClass);
 
             uint8_t reserved = 0;
-            if (!ReadValue(ptr, end, reserved))
-                return false;
+            READ_VALUE(reader, reserved);
 
             uint8_t textureCount = 0;
-            if (!ReadValue(ptr, end, textureCount))
-                return false;
+            READ_VALUE(reader, textureCount);
 
             mat.textures.resize(textureCount);
 
             for (uint8_t t = 0; t < textureCount; ++t) {
                 auto& tex = mat.textures[t];
 
-                if (!ReadValue(ptr, end, tex.textureID))
-                    return false;
-                if (!ReadValue(ptr, end, tex.wrapS))
-                    return false;
-                if (!ReadValue(ptr, end, tex.wrapT))
-                    return false;
+                READ_VALUE(reader, tex.textureID);
+                READ_VALUE(reader, tex.wrapS);
+                READ_VALUE(reader, tex.wrapT);
 
                 if (model.minorVersion == 5) {
-                    if (!ReadValue(ptr, end, tex.magFilter))
-                        return false;
-                    if (!ReadValue(ptr, end, tex.minFilter))
-                        return false;
+                    READ_VALUE(reader, tex.magFilter);
+                    READ_VALUE(reader, tex.minFilter);
                 }
                 else {
                     tex.magFilter = 0;
                     tex.minFilter = 0;
                 }
 
-                if (!ReadValue(ptr, end, tex.animRate))
-                    return false;
-                if (!ReadValue(ptr, end, tex.animMode))
-                    return false;
+                READ_VALUE(reader, tex.animRate);
+                READ_VALUE(reader, tex.animMode);
 
                 uint8_t animNameLen = 0;
-                if (!ReadValue(ptr, end, animNameLen))
-                    return false;
+                READ_VALUE(reader, animNameLen);
 
                 if (animNameLen > 0) {
                     tex.animName.resize(animNameLen);
-                    if (!ReadBytes(ptr, end, tex.animName.data(), animNameLen))
-                        return false;
+                    auto readBytes = reader.ReadBytes(tex.animName.data(), animNameLen);
+                    if (!readBytes) return false;
                 }
             }
         }
@@ -349,31 +326,24 @@ namespace S3D {
         return true;
     }
 
-    bool Reader::ParseANIM(const uint8_t*& ptr, const uint8_t* end, Record& model) {
-        if (!CheckMagic(ptr, end, kMagicAnim)) {
+    bool Reader::ParseANIM(DBPF::SafeSpanReader& reader, Record& model) {
+        if (!CheckMagic(reader, kMagicAnim)) {
             return false;
         }
 
         uint32_t length = 0;
-        if (!ReadValue(ptr, end, length))
-            return false;
+        READ_VALUE(reader, length);
 
         auto& anim = model.animation;
 
-        if (!ReadValue(ptr, end, anim.frameCount))
-            return false;
-        if (!ReadValue(ptr, end, anim.frameRate))
-            return false;
-        if (!ReadValue(ptr, end, anim.animMode))
-            return false;
-        if (!ReadValue(ptr, end, anim.flags))
-            return false;
-        if (!ReadValue(ptr, end, anim.displacement))
-            return false;
+        READ_VALUE(reader, anim.frameCount);
+        READ_VALUE(reader, anim.frameRate);
+        READ_VALUE(reader, anim.animMode);
+        READ_VALUE(reader, anim.flags);
+        READ_FLOAT(reader, anim.displacement);
 
         uint16_t nbrMeshes = 0;
-        if (!ReadValue(ptr, end, nbrMeshes))
-            return false;
+        READ_VALUE(reader, nbrMeshes);
 
         anim.animatedMeshes.resize(nbrMeshes);
 
@@ -381,16 +351,14 @@ namespace S3D {
             auto& mesh = anim.animatedMeshes[m];
 
             uint8_t nameLen = 0;
-            if (!ReadValue(ptr, end, nameLen))
-                return false;
+            READ_VALUE(reader, nameLen);
 
-            if (!ReadValue(ptr, end, mesh.flags))
-                return false;
+            READ_VALUE(reader, mesh.flags);
 
             if (nameLen > 0) {
                 mesh.name.resize(nameLen);
-                if (!ReadBytes(ptr, end, mesh.name.data(), nameLen))
-                    return false;
+                auto readBytes = reader.ReadBytes(mesh.name.data(), nameLen);
+                if (!readBytes) return false;
                 if (!mesh.name.empty() && mesh.name.back() == '\0') {
                     mesh.name.pop_back();
                 }
@@ -400,47 +368,36 @@ namespace S3D {
 
             for (uint16_t f = 0; f < anim.frameCount; ++f) {
                 auto& frame = mesh.frames[f];
-                if (!ReadValue(ptr, end, frame.vertBlock))
-                    return false;
-                if (!ReadValue(ptr, end, frame.indexBlock))
-                    return false;
-                if (!ReadValue(ptr, end, frame.primBlock))
-                    return false;
-                if (!ReadValue(ptr, end, frame.matsBlock))
-                    return false;
+                READ_VALUE(reader, frame.vertBlock);
+                READ_VALUE(reader, frame.indexBlock);
+                READ_VALUE(reader, frame.primBlock);
+                READ_VALUE(reader, frame.matsBlock);
             }
         }
 
         return true;
     }
 
-    bool Reader::ReadVertex(const uint8_t*& ptr, const uint8_t* end,
+    bool Reader::ReadVertex(DBPF::SafeSpanReader& reader,
                             uint32_t format, uint16_t minorVersion,
                             uint32_t stride, Vertex& outVertex) {
-        const uint8_t* vertexStart = ptr;
+        size_t startOffset = reader.Offset();
 
         uint8_t coordsNb = 0;
         uint8_t colorsNb = 0;
         uint8_t texsNb = 0;
         DecodeVertexFormat(format, coordsNb, colorsNb, texsNb);
 
-        if (!ReadValue(ptr, end, outVertex.position.x))
-            return false;
-        if (!ReadValue(ptr, end, outVertex.position.y))
-            return false;
-        if (!ReadValue(ptr, end, outVertex.position.z))
-            return false;
+        READ_FLOAT(reader, outVertex.position.x);
+        READ_FLOAT(reader, outVertex.position.y);
+        READ_FLOAT(reader, outVertex.position.z);
 
         if (colorsNb > 0) {
             uint8_t b = 0, g = 0, r = 0, a = 0;
-            if (!ReadValue(ptr, end, b))
-                return false;
-            if (!ReadValue(ptr, end, g))
-                return false;
-            if (!ReadValue(ptr, end, r))
-                return false;
-            if (!ReadValue(ptr, end, a))
-                return false;
+            READ_VALUE(reader, b);
+            READ_VALUE(reader, g);
+            READ_VALUE(reader, r);
+            READ_VALUE(reader, a);
             outVertex.color = Vec4{r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f};
         }
         else {
@@ -448,29 +405,25 @@ namespace S3D {
         }
 
         if (texsNb > 0) {
-            if (!ReadValue(ptr, end, outVertex.uv.x))
-                return false;
-            if (!ReadValue(ptr, end, outVertex.uv.y))
-                return false;
+            READ_FLOAT(reader, outVertex.uv.x);
+            READ_FLOAT(reader, outVertex.uv.y);
         }
         else {
             outVertex.uv = Vec2{0.0f, 0.0f};
         }
 
         if (texsNb > 1) {
-            if (!ReadValue(ptr, end, outVertex.uv2.x))
-                return false;
-            if (!ReadValue(ptr, end, outVertex.uv2.y))
-                return false;
+            READ_FLOAT(reader, outVertex.uv2.x);
+            READ_FLOAT(reader, outVertex.uv2.y);
         }
         else {
             outVertex.uv2 = Vec2{0.0f, 0.0f};
         }
 
-        size_t bytesRead = ptr - vertexStart;
+        size_t bytesRead = reader.Offset() - startOffset;
         if (bytesRead < stride) {
-            if (!SkipBytes(ptr, end, stride - bytesRead))
-                return false;
+            auto skip = reader.Skip(stride - bytesRead);
+            if (!skip) return false;
         }
 
         (void)minorVersion;
@@ -520,14 +473,16 @@ namespace S3D {
         }
     }
 
-    bool Reader::CheckMagic(const uint8_t*& ptr, const uint8_t* end, const char* expected) {
+    bool Reader::CheckMagic(DBPF::SafeSpanReader& reader, const char* expected) {
         const size_t len = std::strlen(expected);
-        if (ptr + len > end)
+        auto bytes = reader.PeekBytes(len);
+        if (!bytes) return false;
+        if (std::memcmp(bytes->data(), expected, len) != 0)
             return false;
-        if (std::memcmp(ptr, expected, len) != 0)
-            return false;
-        ptr += len;
-        return true;
+        auto skip = reader.Skip(len);
+        return skip.has_value();
     }
+
+#undef READ_VALUE
 
 } // namespace S3D

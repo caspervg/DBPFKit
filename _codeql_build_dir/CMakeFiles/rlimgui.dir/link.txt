@@ -1,2 +1,0 @@
-/usr/bin/ar qc librlimgui.a "CMakeFiles/rlimgui.dir/_deps/rlimgui-src/rlImGui.cpp.o"
-/usr/bin/ranlib librlimgui.a

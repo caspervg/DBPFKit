@@ -5,18 +5,22 @@
 #include <squish/squish.h>
 
 #include "QFSDecompressor.h"
+#include "SafeSpanReader.h"
 
 namespace {
 
-bool ReadUInt24(const uint8_t*& ptr, const uint8_t* end, uint32_t& out) {
-    if (ptr + 3 > end) {
-        return false;
-    }
-    out = (static_cast<uint32_t>(ptr[0]) << 16) |
-          (static_cast<uint32_t>(ptr[1]) << 8) |
-          static_cast<uint32_t>(ptr[2]);
-    ptr += 3;
-    return true;
+ParseExpected<uint32_t> ReadUInt24(DBPF::SafeSpanReader& reader) {
+    auto byte0 = reader.ReadLE<uint8_t>();
+    if (!byte0) return std::unexpected(byte0.error());
+    auto byte1 = reader.ReadLE<uint8_t>();
+    if (!byte1) return std::unexpected(byte1.error());
+    auto byte2 = reader.ReadLE<uint8_t>();
+    if (!byte2) return std::unexpected(byte2.error());
+    
+    uint32_t result = (static_cast<uint32_t>(*byte0) << 16) |
+                      (static_cast<uint32_t>(*byte1) << 8) |
+                      static_cast<uint32_t>(*byte2);
+    return result;
 }
 
 std::string MakeName(const char name[4]) {
@@ -48,19 +52,24 @@ ParseExpected<Record> Reader::Parse(std::span<const uint8_t> buffer) {
         fileSpan = std::span<const uint8_t>(decompressed.data(), decompressed.size());
     }
 
-    const uint8_t* filePtr = fileSpan.data();
-    const size_t fileSize = fileSpan.size();
-
-    const uint8_t* ptr = filePtr;
-    const uint8_t* end = filePtr + fileSize;
-
+    DBPF::SafeSpanReader reader(fileSpan);
+    
     Record outFile;
-    if (!ReadValue(ptr, end, outFile.header.magic) ||
-        !ReadValue(ptr, end, outFile.header.size) ||
-        !ReadValue(ptr, end, outFile.header.numEntries) ||
-        !ReadValue(ptr, end, outFile.header.dirId)) {
-        return Fail("Failed to read FSH header");
-    }
+    auto magic = reader.ReadLE<uint32_t>();
+    if (!magic) return std::unexpected(magic.error());
+    outFile.header.magic = *magic;
+    
+    auto size = reader.ReadLE<uint32_t>();
+    if (!size) return std::unexpected(size.error());
+    outFile.header.size = *size;
+    
+    auto numEntries = reader.ReadLE<uint32_t>();
+    if (!numEntries) return std::unexpected(numEntries.error());
+    outFile.header.numEntries = *numEntries;
+    
+    auto dirId = reader.ReadLE<uint32_t>();
+    if (!dirId) return std::unexpected(dirId.error());
+    outFile.header.dirId = *dirId;
 
     if (!outFile.header.IsValid()) {
         return Fail("Invalid FSH header");
@@ -74,12 +83,14 @@ ParseExpected<Record> Reader::Parse(std::span<const uint8_t> buffer) {
     std::vector<DirEntryParsed> directory(outFile.header.numEntries);
     for (uint32_t i = 0; i < outFile.header.numEntries; ++i) {
         DirectoryEntry dir{};
-        if (!ReadBytes(ptr, end, dir.name, sizeof(dir.name)) ||
-            !ReadValue(ptr, end, dir.offset)) {
-            return Fail("Failed to read FSH directory entry");
-        }
+        auto readBytes = reader.ReadBytes(dir.name, sizeof(dir.name));
+        if (!readBytes) return std::unexpected(readBytes.error());
+        
+        auto offset = reader.ReadLE<uint32_t>();
+        if (!offset) return std::unexpected(offset.error());
+        
         directory[i].name = MakeName(dir.name);
-        directory[i].offset = dir.offset;
+        directory[i].offset = *offset;
     }
 
     outFile.entries.clear();
@@ -89,44 +100,45 @@ ParseExpected<Record> Reader::Parse(std::span<const uint8_t> buffer) {
         const uint32_t offset = directory[i].offset;
         const uint32_t nextOffset = (i + 1 < directory.size())
                                         ? directory[i + 1].offset
-                                        : static_cast<uint32_t>(fileSize);
-        if (offset >= fileSize || offset >= nextOffset) {
+                                        : static_cast<uint32_t>(fileSpan.size());
+        if (offset >= fileSpan.size() || offset >= nextOffset) {
             return Fail("Invalid FSH directory offsets");
         }
 
-        const uint8_t* entryPtr = filePtr + offset;
-        const uint8_t* entryEnd = filePtr + nextOffset;
+        // Create a reader for this entry's data
+        auto entrySpan = fileSpan.subspan(offset, nextOffset - offset);
+        DBPF::SafeSpanReader entryReader(entrySpan);
 
         Entry entry{};
         entry.name = directory[i].name;
 
-        uint8_t record = 0;
-        uint32_t blockSize = 0;
-        if (!ReadBytes(entryPtr, entryEnd, &record, 1) ||
-            !ReadUInt24(entryPtr, entryEnd, blockSize)) {
-            return Fail("Failed to read FSH record header");
-        }
+        auto record = entryReader.ReadLE<uint8_t>();
+        if (!record) return std::unexpected(record.error());
+        
+        auto blockSize = ReadUInt24(entryReader);
+        if (!blockSize) return std::unexpected(blockSize.error());
 
-        uint16_t width = 0, height = 0;
-        uint16_t xCenter = 0, yCenter = 0;
-        uint16_t xOffset = 0, yOffset = 0;
-        if (!ReadValue(entryPtr, entryEnd, width) ||
-            !ReadValue(entryPtr, entryEnd, height) ||
-            !ReadValue(entryPtr, entryEnd, xCenter) ||
-            !ReadValue(entryPtr, entryEnd, yCenter) ||
-            !ReadValue(entryPtr, entryEnd, xOffset) ||
-            !ReadValue(entryPtr, entryEnd, yOffset)) {
-            return Fail("Failed to read FSH record dimensions");
-        }
+        auto width = entryReader.ReadLE<uint16_t>();
+        if (!width) return std::unexpected(width.error());
+        auto height = entryReader.ReadLE<uint16_t>();
+        if (!height) return std::unexpected(height.error());
+        auto xCenter = entryReader.ReadLE<uint16_t>();
+        if (!xCenter) return std::unexpected(xCenter.error());
+        auto yCenter = entryReader.ReadLE<uint16_t>();
+        if (!yCenter) return std::unexpected(yCenter.error());
+        auto xOffset = entryReader.ReadLE<uint16_t>();
+        if (!xOffset) return std::unexpected(xOffset.error());
+        auto yOffset = entryReader.ReadLE<uint16_t>();
+        if (!yOffset) return std::unexpected(yOffset.error());
 
-        entry.formatCode = record & 0x7F;
-        entry.width = width;
-        entry.height = height;
-        entry.mipCount = static_cast<uint8_t>((yOffset >> 12) & 0x0F);
+        entry.formatCode = *record & 0x7F;
+        entry.width = *width;
+        entry.height = *height;
+        entry.mipCount = static_cast<uint8_t>((*yOffset >> 12) & 0x0F);
 
         for (uint8_t mip = 0; mip <= entry.mipCount; ++mip) {
-            uint16_t mipWidth = static_cast<uint16_t>(std::max<int>(1, width >> mip));
-            uint16_t mipHeight = static_cast<uint16_t>(std::max<int>(1, height >> mip));
+            uint16_t mipWidth = static_cast<uint16_t>(std::max<int>(1, *width >> mip));
+            uint16_t mipHeight = static_cast<uint16_t>(std::max<int>(1, *height >> mip));
             if ((entry.formatCode == kCodeDXT1 || entry.formatCode == kCodeDXT3) &&
                 (mipWidth % 4 != 0 || mipHeight % 4 != 0)) {
                 break;
@@ -137,21 +149,25 @@ ParseExpected<Record> Reader::Parse(std::span<const uint8_t> buffer) {
             bitmap.height = mipHeight;
             bitmap.mipLevel = mip;
             const size_t dataSize = bitmap.ExpectedDataSize();
-            if (entryPtr + dataSize > entryEnd) {
-                return Fail("Bitmap data exceeds entry bounds");
-            }
-            bitmap.data.assign(entryPtr, entryPtr + dataSize);
-            entryPtr += dataSize;
+            
+            auto bitmapData = entryReader.PeekBytes(dataSize);
+            if (!bitmapData) return std::unexpected(bitmapData.error());
+            
+            bitmap.data.assign(bitmapData->begin(), bitmapData->end());
+            auto skip = entryReader.Skip(dataSize);
+            if (!skip) return std::unexpected(skip.error());
+            
             entry.bitmaps.push_back(std::move(bitmap));
         }
 
-        if (blockSize != 0) {
-            const uint32_t attachmentOffset = offset + blockSize;
+        if (*blockSize != 0) {
+            const uint32_t attachmentOffset = offset + *blockSize;
             if (attachmentOffset + 4 < nextOffset) {
-                const uint8_t* attachment = filePtr + attachmentOffset;
-                if (attachment[0] == 0x70) {
-                    auto labelStart = reinterpret_cast<const char*>(attachment + 4);
-                    auto labelEnd = reinterpret_cast<const char*>(filePtr + nextOffset);
+                // Use the original fileSpan to access the attachment
+                auto attachmentSpan = fileSpan.subspan(attachmentOffset, nextOffset - attachmentOffset);
+                if (attachmentSpan.size() >= 5 && attachmentSpan[0] == 0x70) {
+                    auto labelStart = reinterpret_cast<const char*>(attachmentSpan.data() + 4);
+                    auto labelEnd = reinterpret_cast<const char*>(attachmentSpan.data() + attachmentSpan.size());
                     const char* terminator = std::find(labelStart, labelEnd, '\0');
                     entry.label.assign(labelStart, terminator);
                 }

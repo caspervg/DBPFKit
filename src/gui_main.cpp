@@ -363,7 +363,8 @@ namespace {
 
     std::optional<LoadedModel> BuildModelFromRecord(const S3D::Record& record, const DBPF::Tgi tgi,
                                                     const DBPF::Reader& reader,
-                                                    bool previewMode) {
+                                                    bool previewMode,
+                                                    float rotationDegrees) {
         if (record.animation.animatedMeshes.empty() &&
             record.vertexBuffers.empty()) {
             return std::nullopt;
@@ -378,7 +379,7 @@ namespace {
         const auto meshCount = static_cast<int>(meshSources.size());
 
         Model model{};
-        model.transform = MatrixIdentity();
+        model.transform = MatrixRotateY(DEG2RAD * rotationDegrees);
         model.meshes = static_cast<Mesh*>(MemAlloc(sizeof(Mesh) * meshCount));
         model.materials = static_cast<Material*>(MemAlloc(sizeof(Material) * meshCount));
         model.meshMaterial = static_cast<int*>(MemAlloc(sizeof(int) * meshCount));
@@ -682,12 +683,14 @@ int main(int argc, char* argv[]) {
                 static constexpr float zoomScale[5] = {1.0f / 16.0f, 1.0f / 8.0f, 1.0f / 4.0f, 1.0f / 2.0f, 1.0f};
                 width *= zoomScale[std::clamp(lodZoom, 1, 5) - 1];
             }
-            camera.fovy = width * 1.1f; // margin
+            // Show more context: push camera framing out to match SC4 viewer sizing
+            constexpr float kBaseMargin = 2.2f;
+            camera.fovy = width * kBaseMargin;
 
             // Set camera position along rotated forward vector
             // Choose camera distance per zoom (farther at lower zooms)
             // Keep camera within a safe clip range; orthographic size is set by camera.fovy
-            static constexpr float zoomDistance[5] = {300.0f, 250.0f, 200.0f, 150.0f, 120.0f};
+            static constexpr float zoomDistance[5] = {800.0f, 650.0f, 500.0f, 360.0f, 260.0f};
             const float distance = zoomDistance[std::clamp(lodZoom, 1, 5) - 1];
             // View rotation same as bounds
             Matrix rotView = BuildRotation(yaw, pitch, camSwapRotationOrder);
@@ -705,8 +708,11 @@ int main(int argc, char* argv[]) {
                 }
             }
             else {
+                const float rotDegrees = useInstanceOffsets
+                    ? static_cast<float>((lodRotation & 0x3) * 90)
+                    : 0.0f;
                 // Use checker override in preview for UV debugging if enabled via UI
-                model = BuildModelFromRecord(selectedRecord, selectedBaseTgi, reader, previewMode);
+                model = BuildModelFromRecord(selectedRecord, selectedBaseTgi, reader, previewMode, rotDegrees);
                 if (!model && modelStatus.empty()) {
                     modelStatus = "Unable to build mesh for this S3D.";
                 }
@@ -890,6 +896,7 @@ int main(int argc, char* argv[]) {
                             else {
                                 modelStatus.clear();
                                 selectedRecord = std::move(*newData);
+                                lodRotation = std::clamp(lodRotation, 0, 3);
                                 currentModelTgi = tgi;
                                 modelChanged = true;
                             }

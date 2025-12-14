@@ -325,31 +325,82 @@ namespace {
         return true;
     }
 
-    std::optional<Texture2D> LoadTextureForMaterial(const DBPF::Reader& reader, DBPF::Tgi tgi, uint32_t textureId) {
-        DBPF::TgiMask mask;
-        mask.type = 0x7AB50E44; // FSH
-        mask.group = tgi.group; // Hopefully
-        mask.instance = textureId;
-
-        auto fsh = reader.LoadFSH(mask);
-        if (!fsh.has_value() || fsh->entries.empty() || fsh->entries[0].bitmaps.empty()) {
-            mask.group = 0x1ABE787D; // Fallback
-            fsh = reader.LoadFSH(mask);
+    std::optional<Texture2D> LoadTextureForMaterial(const DBPF::Reader& reader, DBPF::Tgi tgi, uint32_t textureId,
+                                                    bool nightMode, bool nightOverlay) {
+        const auto tryLoad = [&](uint32_t inst, uint32_t group) -> std::optional<FSH::Record> {
+            DBPF::TgiMask mask;
+            mask.type = 0x7AB50E44; // FSH
+            mask.group = group;
+            mask.instance = inst;
+            auto fsh = reader.LoadFSH(mask);
             if (!fsh.has_value() || fsh->entries.empty() || fsh->entries[0].bitmaps.empty()) {
-                std::println("Could not load FSH for texture ID {}", textureId);
+                return std::nullopt;
+            }
+            return std::make_optional(std::move(*fsh));
+        };
+
+        std::optional<FSH::Record> day;
+        std::optional<FSH::Record> night;
+        const auto loadDay = [&]() -> std::optional<FSH::Record> {
+            if (day) return day;
+            day = tryLoad(textureId, tgi.group);
+            if (!day) day = tryLoad(textureId, 0x1ABE787D);
+            return day;
+        };
+
+        if (nightMode) {
+            const uint32_t nightInst = textureId + 0x8000u;
+            night = tryLoad(nightInst, tgi.group);
+            if (!night) {
+                night = tryLoad(nightInst, 0x1ABE787D); // fallback group
+            }
+        }
+        if (!night) {
+            // fall back to day-only
+            night = loadDay();
+        }
+        if (!night) {
+            std::println("Could not load FSH for texture ID {}", textureId);
+            return std::nullopt;
+        }
+
+        std::vector<uint8_t> rgba;
+        if (nightOverlay && nightMode) {
+            // Blend night over day if both are present and compatible
+            auto base = loadDay();
+            if (base && !base->entries.empty() && !base->entries[0].bitmaps.empty()) {
+                const auto& nightBmp = night->entries[0].bitmaps[0];
+                const auto& dayBmp = base->entries[0].bitmaps[0];
+                if (nightBmp.width == dayBmp.width && nightBmp.height == dayBmp.height) {
+                    std::vector<uint8_t> dayRgba;
+                    if (FSH::Reader::ConvertToRGBA8(dayBmp, dayRgba) &&
+                        FSH::Reader::ConvertToRGBA8(nightBmp, rgba)) {
+                        const size_t pxCount = dayBmp.width * dayBmp.height;
+                        for (size_t i = 0; i < pxCount; ++i) {
+                            const size_t idx = i * 4;
+                            const float a = static_cast<float>(rgba[idx + 3]) / 255.0f;
+                            dayRgba[idx + 0] = static_cast<uint8_t>(dayRgba[idx + 0] * (1.0f - a) + rgba[idx + 0] * a);
+                            dayRgba[idx + 1] = static_cast<uint8_t>(dayRgba[idx + 1] * (1.0f - a) + rgba[idx + 1] * a);
+                            dayRgba[idx + 2] = static_cast<uint8_t>(dayRgba[idx + 2] * (1.0f - a) + rgba[idx + 2] * a);
+                            // Preserve max alpha to keep cutouts
+                            dayRgba[idx + 3] = std::max(dayRgba[idx + 3], rgba[idx + 3]);
+                        }
+                        rgba.swap(dayRgba);
+                    }
+                }
+            }
+        }
+
+        if (rgba.empty()) {
+            if (!FSH::Reader::ConvertToRGBA8(night->entries[0].bitmaps[0], rgba)) {
                 return std::nullopt;
             }
         }
 
-        std::vector<uint8_t> rgba;
-        if (!FSH::Reader::ConvertToRGBA8(fsh->entries[0].bitmaps[0], rgba)) {
-            return std::nullopt;
-        }
-
         Image img{
             .data = rgba.data(),
-            .width = fsh->entries[0].bitmaps[0].width,
-            .height = fsh->entries[0].bitmaps[0].height,
+            .width = night->entries[0].bitmaps[0].width,
+            .height = night->entries[0].bitmaps[0].height,
             .mipmaps = 1,
             .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
         };
@@ -364,6 +415,8 @@ namespace {
     std::optional<LoadedModel> BuildModelFromRecord(const S3D::Record& record, const DBPF::Tgi tgi,
                                                     const DBPF::Reader& reader,
                                                     bool previewMode,
+                                                    bool nightMode,
+                                                    bool nightOverlay,
                                                     float rotationDegrees) {
         if (record.animation.animatedMeshes.empty() &&
             record.vertexBuffers.empty()) {
@@ -438,7 +491,7 @@ namespace {
 
             if (matInfo) {
                 for (const auto& texInfo : matInfo->textures) {
-                    if (auto texture = LoadTextureForMaterial(reader, tgi, texInfo.textureID)) {
+                    if (auto texture = LoadTextureForMaterial(reader, tgi, texInfo.textureID, nightMode, nightOverlay)) {
                         // Inspired by S3DTexturesHolder: clamp + linear filtering works best
                         // for previewing sprite LODs. Respect material flags when not previewing.
                         if (previewMode) {
@@ -543,6 +596,8 @@ int main(int argc, char* argv[]) {
     bool disableBackfaceCulling = true; // Helpful for single-sided LOD quads (default on for S3D)
     bool previewMode = true; // Fixed framing like S3DViewer.py
     bool previewBestFit = true; // If false, scale by zoom table
+    bool nightMode = false; // Load textures with +0x8000 night instance when available
+    bool nightOverlay = true; // Blend night over day (when available)
     float modelScale = 1.0f;
 
     // Camera tweak toggles to help diagnose coordinate differences
@@ -708,7 +763,7 @@ int main(int argc, char* argv[]) {
                     ? static_cast<float>((lodRotation & 0x3) * 90)
                     : 0.0f;
                 // Use checker override in preview for UV debugging if enabled via UI
-                model = BuildModelFromRecord(selectedRecord, selectedBaseTgi, reader, previewMode, rotDegrees);
+                model = BuildModelFromRecord(selectedRecord, selectedBaseTgi, reader, previewMode, nightMode, nightOverlay, rotDegrees);
                 if (!model && modelStatus.empty()) {
                     modelStatus = "Unable to build mesh for this S3D.";
                 }
@@ -771,6 +826,15 @@ int main(int argc, char* argv[]) {
             if (previewMode) {
                 ImGui::SameLine();
                 ImGui::Checkbox("Best fit", &previewBestFit);
+            }
+            bool nightChanged = ImGui::Checkbox("Night textures", &nightMode);
+            if (nightMode) {
+                ImGui::SameLine();
+                nightChanged |= ImGui::Checkbox("Night overlay", &nightOverlay);
+            }
+            if (nightChanged) {
+                modelChanged = true;
+                ReleaseLoadedModel(model);
             }
             if (listChanged) {
                 selectedPiece = 0;

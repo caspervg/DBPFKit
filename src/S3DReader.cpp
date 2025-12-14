@@ -484,5 +484,6 @@ namespace S3D {
     }
 
 #undef READ_VALUE
+#undef READ_FLOAT
 
 } // namespace S3D

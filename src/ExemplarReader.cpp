@@ -195,34 +195,28 @@ namespace {
             auto arrayData = reader.PeekBytes(*totalLength);
             if (!arrayData) return std::unexpected(arrayData.error());
 
-            // Read string offsets and strings
-            for (uint32_t i = 0; i < *entryCount; ++i) {
-                // Read length from offset table
-                if (i * 4 + 4 > arrayData->size()) {
-                    return Fail("String-array offset table exceeds buffer bounds");
-                }
-                uint32_t length = 0;
-                std::memcpy(&length, arrayData->data() + i * 4, sizeof(uint32_t));
-                
-                // Calculate string data position
-                size_t stringOffset = *entryCount * 4;
-                for (uint32_t j = 0; j < i; ++j) {
-                    uint32_t prevLength = 0;
-                    std::memcpy(&prevLength, arrayData->data() + j * 4, sizeof(uint32_t));
-                    stringOffset += prevLength;
-                }
-                
+            const size_t offsetTableSize = static_cast<size_t>(*entryCount) * sizeof(uint32_t);
+            if (offsetTableSize > arrayData->size()) {
+                return Fail("String-array offset table exceeds buffer bounds");
+            }
+
+            std::vector<uint32_t> lengths(*entryCount);
+            std::memcpy(lengths.data(), arrayData->data(), offsetTableSize);
+
+            size_t stringOffset = offsetTableSize;
+            for (uint32_t length : lengths) {
                 if (stringOffset + length > arrayData->size()) {
                     return Fail("String-array entry exceeds buffer bounds");
                 }
-                
-                // Create a temporary reader for the string
+
                 auto stringSpan = arrayData->subspan(stringOffset, length);
                 DBPF::SafeSpanReader stringReader(stringSpan);
                 Exemplar::ValueVariant value;
                 auto result = ReadStringValue(stringReader, length, value);
                 if (!result) return std::unexpected(result.error());
                 property.values.push_back(std::move(value));
+
+                stringOffset += length;
             }
 
             // Skip past the string array data

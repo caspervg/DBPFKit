@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <print>
 #include <system_error>
 
 namespace io {
@@ -20,7 +21,7 @@ namespace io {
         std::error_code ec;
         const auto size = std::filesystem::file_size(path, ec);
         if (ec) {
-            // std::println("[MappedFile] Failed to stat {}: {}", path.string(), ec.message());
+            std::println("[MappedFile] Failed to stat {}: {}", path.string(), ec.message());
             return false;
         }
 

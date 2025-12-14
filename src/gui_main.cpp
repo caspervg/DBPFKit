@@ -12,7 +12,7 @@
 
 namespace {
 
-constexpr auto kDefaultRul0Path = "../examples/rul0/nam_full.txt";
+constexpr auto kDefaultRul0Path = "../examples/rul0/4100_L2STR.txt";
 
 struct PieceView {
     uint32_t id = 0;

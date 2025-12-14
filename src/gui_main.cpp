@@ -14,6 +14,7 @@
 #define NOMINMAX
 
 #include <algorithm>
+#include <cstdint>
 #include <format>
 #include <optional>
 #include <print>
@@ -97,6 +98,12 @@ namespace {
         std::vector<Shader> shaders; // any dynamic shaders we create (UV, alpha-test)
     };
 
+    struct ViewTarget {
+        RenderTexture2D rt{};
+        int width = 0;
+        int height = 0;
+    };
+
     void ReleaseLoadedModel(std::optional<LoadedModel>& handle) {
         if (!handle) {
             return;
@@ -112,6 +119,31 @@ namespace {
         }
         UnloadModel(handle->model);
         handle.reset();
+    }
+
+    void ReleaseViewTarget(ViewTarget& target) {
+        if (target.rt.id != 0) {
+            UnloadRenderTexture(target.rt);
+            target.rt = RenderTexture2D{};
+            target.width = 0;
+            target.height = 0;
+        }
+    }
+
+    bool EnsureViewTarget(ViewTarget& target, int width, int height) {
+        width = std::max(width, 1);
+        height = std::max(height, 1);
+        if (target.rt.id != 0 && target.width == width && target.height == height) {
+            return true;
+        }
+        ReleaseViewTarget(target);
+        target.rt = LoadRenderTexture(width, height);
+        if (target.rt.id == 0) {
+            return false;
+        }
+        target.width = width;
+        target.height = height;
+        return true;
     }
 
     std::vector<uint16_t> ExpandPrimitives(const S3D::PrimitiveBlock& primitives,
@@ -599,6 +631,7 @@ int main(int argc, char* argv[]) {
     bool nightMode = false; // Load textures with +0x8000 night instance when available
     bool nightOverlay = true; // Blend night over day (when available)
     float modelScale = 1.0f;
+    ViewTarget viewportTarget{};
 
     // Camera tweak toggles to help diagnose coordinate differences
     bool camInvertPitchSign = true; // Invert sign of pitch used for bounds/view (enabled by default)
@@ -678,13 +711,10 @@ int main(int argc, char* argv[]) {
     auto run = true;
 
     while (!WindowShouldClose() && run) {
-        BeginDrawing();
-        ClearBackground(RAYWHITE);
         if (!previewMode) {
             UpdateCamera(&camera, CAMERA_ORBITAL);
         }
 
-        BeginMode3D(camera);
         if (previewMode && !selectedRecord.vertexBuffers.empty()) {
             static constexpr float kZoomScales[5] = {1.0f / 16.0f, 1.0f / 8.0f, 1.0f / 4.0f, 1.0f / 2.0f, 1.0f};
             modelScale = kZoomScales[std::clamp(lodZoom, 1, 5) - 1];
@@ -771,21 +801,8 @@ int main(int argc, char* argv[]) {
             modelChanged = false;
         }
 
-        DrawGrid(200, 1.f);
-
-        if (model.has_value()) {
-            if (disableBackfaceCulling) rlDisableBackfaceCulling();
-            if (previewMode) {
-                DrawModelEx(model->model, Vector3Zero(), Vector3{0, 1, 0}, 0.0f,
-                            Vector3{modelScale, modelScale, modelScale}, WHITE);
-            }
-            else {
-                DrawModel(model->model, Vector3Zero(), 1.f, WHITE);
-            }
-            if (disableBackfaceCulling) rlEnableBackfaceCulling();
-        }
-
-        EndMode3D();
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
 
         rlImGuiBegin();
 
@@ -809,6 +826,39 @@ int main(int argc, char* argv[]) {
 
             ImGui::EndMainMenuBar();
         }
+
+        if (ImGui::Begin("Viewport")) {
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            const int viewW = std::max(1, static_cast<int>(avail.x));
+            const int viewH = std::max(1, static_cast<int>(avail.y));
+            if (EnsureViewTarget(viewportTarget, viewW, viewH)) {
+                BeginTextureMode(viewportTarget.rt);
+                ClearBackground(RAYWHITE);
+                BeginMode3D(camera);
+                DrawGrid(200, 1.f);
+                if (model.has_value()) {
+                    if (disableBackfaceCulling) rlDisableBackfaceCulling();
+                    if (previewMode) {
+                        DrawModelEx(model->model, Vector3Zero(), Vector3{0, 1, 0}, 0.0f,
+                                    Vector3{modelScale, modelScale, modelScale}, WHITE);
+                    }
+                    else {
+                        DrawModel(model->model, Vector3Zero(), 1.f, WHITE);
+                    }
+                    if (disableBackfaceCulling) rlEnableBackfaceCulling();
+                }
+                EndMode3D();
+                EndTextureMode();
+
+                ImGui::Image(static_cast<ImTextureID>(viewportTarget.rt.texture.id),
+                             ImVec2(static_cast<float>(viewW), static_cast<float>(viewH)),
+                             ImVec2(0, 1), ImVec2(1, 0));
+            }
+            else {
+                ImGui::TextUnformatted("Failed to create render target");
+            }
+        }
+        ImGui::End();
 
         if (showModelsPanel) {
             ImGui::Begin("Models");
@@ -974,16 +1024,15 @@ int main(int argc, char* argv[]) {
             ImGui::EndChild();
             ImGui::Columns(1);
             ImGui::End();
-
-            rlImGuiEnd();
-
-            DrawFPS(10, 10);
-
-            EndDrawing();
         }
+
+        rlImGuiEnd();
+
+        EndDrawing();
     }
 
     ReleaseLoadedModel(model);
+    ReleaseViewTarget(viewportTarget);
     rlImGuiShutdown();
     CloseWindow();
     return 0;

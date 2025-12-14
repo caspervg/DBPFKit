@@ -116,7 +116,7 @@ namespace DBPF {
         EntryData entryData;
         if (!LoadEntryData(entry, entryData)) {
             std::println("[DBPF] Invalid bounds for entry {} (offset {}, size {})",
-                         entry.tgi.ToString(), entry.offset, entry.size);
+                          entry.tgi.ToString(), entry.offset, entry.size);
             return std::nullopt;
         }
 

@@ -43,6 +43,7 @@
 
 # CMake
 cmake-build-*/
+_codeql_build_dir/
 
 # Mongo Explorer plugin
 .idea/**/mongoSettings.xml
@@ -122,4 +123,4 @@ fabric.properties
  *.ipr
 
 examples/*
-!examples/.gitkeep
+!examples/.gitkeep_codeql_build_dir/

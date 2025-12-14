@@ -9,10 +9,10 @@
 #include "ExemplarReader.h"
 #include "FSHReader.h"
 #include "LTextReader.h"
-#include "S3DReader.h"
 #include "RUL0.h"
-#include "ini.h"
+#include "S3DReader.h"
 #include "TGI.h"
+#include "ini.h"
 
 #ifdef _WIN32
 #    include <objbase.h>
@@ -167,7 +167,7 @@ auto main() -> int {
 
     auto exemplarEntries = reader.FindEntries("Exemplar");
     for (const auto& entry : exemplarEntries) {
-        //std::println("ExemplarEntry {}: {}", entry->tgi.ToString(), entry->GetSize());
+        std::println("ExemplarEntry {}: {}", entry->tgi.ToString(), entry->GetSize());
         const auto res = reader.LoadExemplar(*entry);
         if (!res.has_value()) {
             std::println("Failed to load exemplar {}: {}", entry->tgi.ToString(), res.error().message);

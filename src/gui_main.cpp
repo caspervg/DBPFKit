@@ -266,8 +266,8 @@ namespace {
             mesh.vertices[i * 3 + 0] = vert.position.x - center.x;
             mesh.vertices[i * 3 + 1] = vert.position.y - center.y + yOffset;
             mesh.vertices[i * 3 + 2] = vert.position.z - center.z;
-            // Correct mirrored text by flipping U; V as stored
-            mesh.texcoords[i * 2 + 0] = 1.0f - vert.uv.x;
+            // Keep UVs as-is; S3D sprites already bake mirroring
+            mesh.texcoords[i * 2 + 0] = vert.uv.x;
             mesh.texcoords[i * 2 + 1] = vert.uv.y;
             mesh.colors[i * 4 + 0] = static_cast<unsigned char>(vert.color.x * 255.f);
             mesh.colors[i * 4 + 1] = static_cast<unsigned char>(vert.color.y * 255.f);
@@ -499,13 +499,14 @@ namespace {
     }
 
     // Build a Yaw/Pitch rotation with selectable multiplication order.
-    // swapOrder = false -> X then Y (MatrixRotateX * MatrixRotateY)
-    // swapOrder = true  -> Y then X (MatrixRotateY * MatrixRotateX)
+    // Column-major: rightmost matrix applies first.
+    // swapOrder = false -> pitch then yaw   (Ry * Rx)
+    // swapOrder = true  -> yaw then pitch   (Rx * Ry)
     static Matrix BuildRotation(float yawDeg, float pitchDeg, bool swapOrder)
     {
-        const Matrix my = MatrixRotateY(DEG2RAD * yawDeg);
-        const Matrix mx = MatrixRotateX(DEG2RAD * pitchDeg);
-        return swapOrder ? MatrixMultiply(my, mx) : MatrixMultiply(mx, my);
+        const Matrix ry = MatrixRotateY(DEG2RAD * yawDeg);
+        const Matrix rx = MatrixRotateX(DEG2RAD * pitchDeg);
+        return swapOrder ? MatrixMultiply(rx, ry) : MatrixMultiply(ry, rx);
     }
 
 } // namespace
@@ -547,6 +548,7 @@ int main(int argc, char* argv[]) {
     bool camSwapRotationOrder = true; // Swap rotation order (X then Y instead of Y then X)
 
     size_t selectedPiece = 0;
+    DBPF::Tgi currentModelTgi{};
     // Helper to key S3D LOD sprite families
     using FamKey = std::tuple<uint32_t, uint32_t, uint32_t, uint8_t>;
     std::map<FamKey, size_t> familyCounts; // number of variants per family
@@ -598,6 +600,7 @@ int main(int argc, char* argv[]) {
         modelStatus.clear();
         ReleaseLoadedModel(model);
         selectedBaseTgi = {};
+        currentModelTgi = {};
     };
     reload();
 
@@ -662,7 +665,8 @@ int main(int argc, char* argv[]) {
                 {relMin.x, relMax.y, relMax.z}, {relMax.x, relMax.y, relMax.z},
             };
             // Bounds rotation: use same yaw/pitch as view and allow order toggle
-            float yaw = 22.5f;
+            const uint32_t rotationNibble = std::min<uint32_t>((currentModelTgi.instance & 0xF0u) >> 4, 3);
+            float yaw = 22.5f + 90.0f * static_cast<float>(rotationNibble);
             float pitch = angleX * (camInvertPitchSign ? -1.0f : 1.0f);
             Matrix rotBounds = BuildRotation(yaw, pitch, camSwapRotationOrder);
             float minX = FLT_MAX, maxX = -FLT_MAX, minY = FLT_MAX, maxY = -FLT_MAX;
@@ -689,7 +693,7 @@ int main(int argc, char* argv[]) {
             Matrix rotView = BuildRotation(yaw, pitch, camSwapRotationOrder);
             Vector3 forward = Vector3Transform(Vector3{0, 0, -1}, rotView);
             // Place camera farther as distance grows (zoom 1 far, zoom 5 near)
-            camera.position = Vector3Add(camera.target, Vector3Scale(forward, distance));
+            camera.position = Vector3Subtract(camera.target, Vector3Scale(forward, distance));
             camera.up = {0.f, 1.f, 0.f};
             camera.projection = CAMERA_ORTHOGRAPHIC;
         }
@@ -763,6 +767,7 @@ int main(int argc, char* argv[]) {
             if (listChanged) {
                 selectedPiece = 0;
                 selectedBaseTgi = {};
+                currentModelTgi = {};
                 modelStatus.clear();
                 ReleaseLoadedModel(model);
             }
@@ -801,23 +806,22 @@ int main(int argc, char* argv[]) {
                             }
                             // Compute derived instance using SC4 pattern:
                             // instance = base + (zoom-1)*0x100 + rotation*0x10
-                            auto data = [&]() {
-                                if (useInstanceOffsets) {
-                                    DBPF::Tgi tgi = selectedBaseTgi;
-                                    const uint32_t zoomOffset = static_cast<uint32_t>(lodZoom - 1) * 0x100u;
-                                    const uint32_t rotOffset = static_cast<uint32_t>(lodRotation) * 0x10u;
-                                    tgi.instance = tgi.instance + zoomOffset + rotOffset;
-                                    return reader.LoadS3D(tgi);
-                                }
-                                return reader.LoadS3D(*entry);
-                            }();
+                            DBPF::Tgi tgiToLoad = useInstanceOffsets ? selectedBaseTgi : entry->tgi;
+                            if (useInstanceOffsets) {
+                                const uint32_t zoomOffset = static_cast<uint32_t>(lodZoom - 1) * 0x100u;
+                                const uint32_t rotOffset = static_cast<uint32_t>(lodRotation) * 0x10u;
+                                tgiToLoad.instance = tgiToLoad.instance + zoomOffset + rotOffset;
+                            }
+                            auto data = reader.LoadS3D(tgiToLoad);
                             if (!data.has_value()) {
                                 modelStatus = data.error().message;
+                                currentModelTgi = {};
                                 selectedRecord = S3D::Record{};
                             }
                             else {
                                 modelStatus.clear();
                                 selectedRecord = std::move(*data);
+                                currentModelTgi = tgiToLoad;
                             }
                             modelChanged = true;
                         }
@@ -881,10 +885,12 @@ int main(int argc, char* argv[]) {
                             auto newData = reader.LoadS3D(tgi);
                             if (!newData.has_value()) {
                                 modelStatus = newData.error().message;
+                                currentModelTgi = {};
                             }
                             else {
                                 modelStatus.clear();
                                 selectedRecord = std::move(*newData);
+                                currentModelTgi = tgi;
                                 modelChanged = true;
                             }
                         }

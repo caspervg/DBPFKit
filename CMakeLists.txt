@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SC4RULParser)
+project(DBPFKit)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -80,7 +80,7 @@ target_link_libraries(rlimgui PUBLIC imgui raylib)
 add_subdirectory(vendor/catch2)
 
 # Parser library (shared between main executable and tests)
-add_library(SC4RULParserLib STATIC
+add_library(DBPFKitLib STATIC
     vendor/inih/ini.c
     src/RUL0.cpp
     src/FSHReader.cpp
@@ -93,41 +93,41 @@ add_library(SC4RULParserLib STATIC
     src/S3DReader.cpp
     src/TGI.cpp
 )
-target_include_directories(SC4RULParserLib PUBLIC
+target_include_directories(DBPFKitLib PUBLIC
     src
     vendor/inih
     ${MIO_INCLUDE_DIR}
 )
-target_link_libraries(SC4RULParserLib PRIVATE libsquish::Squish)
+target_link_libraries(DBPFKitLib PRIVATE libsquish::Squish)
 
 # Main executable (if you have a main.cpp later)
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
-    add_executable(SC4RULParser src/main.cpp
+    add_executable(DBPFKit src/main.cpp
             src/RUL0.cpp
             src/RUL0.h
             vendor/inih/ini.c
     )
-    target_link_libraries(SC4RULParser PRIVATE SC4RULParserLib)
-    target_include_directories(SC4RULParser PRIVATE vendor/inih)
+    target_link_libraries(DBPFKit PRIVATE DBPFKitLib)
+    target_include_directories(DBPFKit PRIVATE vendor/inih)
 endif()
 
 # Test executable
-add_executable(SC4RULParserTests
+add_executable(DBPFKitTests
     tests/tests.cpp
 )
-target_link_libraries(SC4RULParserTests PRIVATE
-    SC4RULParserLib
+target_link_libraries(DBPFKitTests PRIVATE
+    DBPFKitLib
     libsquish::Squish
     Catch2::Catch2WithMain
 )
 
 # Enable testing
 enable_testing()
-add_test(NAME AllTests COMMAND SC4RULParserTests)
+add_test(NAME AllTests COMMAND DBPFKitTests)
 
-add_executable(SC4RULParserGui src/gui_main.cpp)
-target_link_libraries(SC4RULParserGui PRIVATE
-    SC4RULParserLib
+add_executable(S3DModelViewer apps/s3d_model_viewer/main.cpp)
+target_link_libraries(S3DModelViewer PRIVATE
+    DBPFKitLib
     raylib
     imgui
     rlimgui

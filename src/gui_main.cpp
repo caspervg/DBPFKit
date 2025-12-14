@@ -37,7 +37,7 @@
 
 namespace {
 
-    constexpr auto kDefaultDbpfPath = "../examples/dat/051-non-pac_000.dat";
+    constexpr auto kDefaultDbpfPath = "../examples/dat/SFBT_Party_Props.dat";
 
     struct PieceView {
         uint32_t id = 0;
@@ -613,10 +613,10 @@ int main(int argc, char* argv[]) {
 
     rlImGuiSetup(true);
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    ImGui::GetIO().Fonts->Clear();
-    ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc", 16.0f);
-    if (font == NULL)
-        font = ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttf", 16.0f); // Windows 7
+    // ImGui::GetIO().Fonts->Clear();
+    // ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc", 16.0f);
+    // if (font == NULL)
+    //     font = ImGui::GetIO().Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttf", 16.0f); // Windows 7
 
     auto showModelsPanel = true;
     auto run = true;
@@ -665,7 +665,7 @@ int main(int argc, char* argv[]) {
                 {relMin.x, relMin.y, relMax.z}, {relMax.x, relMin.y, relMax.z},
                 {relMin.x, relMax.y, relMax.z}, {relMax.x, relMax.y, relMax.z},
             };
-            // Bounds rotation: use same yaw/pitch as view and allow order toggle
+            // Bounds rotation: use the same yaw / pitch as view and allow order toggle
             const uint32_t rotationNibble = std::min<uint32_t>((currentModelTgi.instance & 0xF0u) >> 4, 3);
             float yaw = 22.5f + 90.0f * static_cast<float>(rotationNibble);
             float pitch = angleX * (camInvertPitchSign ? -1.0f : 1.0f);
@@ -904,10 +904,10 @@ int main(int argc, char* argv[]) {
                     }
                 }
 
-                ImGui::Columns(1);
-                ImGui::EndChild();
             }
             ImGui::EndChild();
+            ImGui::Columns(1);
+            ImGui::End();
 
             rlImGuiEnd();
 

@@ -13,6 +13,17 @@ FetchContent_Declare(
         GIT_TAG v1.15.1.3
 )
 FetchContent_MakeAvailable(libsquish)
+if(APPLE)
+    # Upstream forces an old universal set of arches (i386;ppc); override to the
+    # current toolchain architecture(s) so clang on Apple Silicon stops failing.
+    set(_squish_arches "${CMAKE_OSX_ARCHITECTURES}")
+    if(NOT _squish_arches)
+        set(_squish_arches "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    if(TARGET libsquish_squish)
+        set_target_properties(libsquish_squish PROPERTIES OSX_ARCHITECTURES "${_squish_arches}")
+    endif()
+endif()
 
 set(MIO_COMMIT 8b6b7d878c89e81614d05edca7936de41ccdd2da)
 FetchContent_Declare(

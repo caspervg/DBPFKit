@@ -810,7 +810,7 @@ TEST_CASE("SafeSpanReader peek and remaining operations") {
     CHECK(remaining.size() == 4);
     CHECK(remaining[0] == 0x01);
     
-    reader.Skip(2);
+    auto skip = reader.Skip(2);
     remaining = reader.RemainingSpan();
     CHECK(remaining.size() == 2);
     CHECK(remaining[0] == 0x03);

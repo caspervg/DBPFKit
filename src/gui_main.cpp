@@ -37,7 +37,7 @@
 
 namespace {
 
-    constexpr auto kDefaultDbpfPath = "../examples/dat/SFBT_Party_Props.dat";
+    constexpr auto kDefaultDbpfPath = "../examples/dat/600-civics.dat";
 
     struct PieceView {
         uint32_t id = 0;
@@ -543,6 +543,7 @@ int main(int argc, char* argv[]) {
     bool disableBackfaceCulling = true; // Helpful for single-sided LOD quads (default on for S3D)
     bool previewMode = true; // Fixed framing like S3DViewer.py
     bool previewBestFit = true; // If false, scale by zoom table
+    float modelScale = 1.0f;
 
     // Camera tweak toggles to help diagnose coordinate differences
     bool camInvertPitchSign = true; // Invert sign of pitch used for bounds/view (enabled by default)
@@ -630,6 +631,9 @@ int main(int argc, char* argv[]) {
 
         BeginMode3D(camera);
         if (previewMode && !selectedRecord.vertexBuffers.empty()) {
+            static constexpr float kZoomScales[5] = {1.0f / 16.0f, 1.0f / 8.0f, 1.0f / 4.0f, 1.0f / 2.0f, 1.0f};
+            modelScale = kZoomScales[std::clamp(lodZoom, 1, 5) - 1];
+
             // CameraPitch defaults per zoom: 30, 35, 40, 45, 45
             auto angleX = 45.0f;
             switch (lodZoom) {
@@ -648,13 +652,11 @@ int main(int argc, char* argv[]) {
                 break; // 5
             }
 
-            // With centered geometry, the target is origin
-            camera.target = {0.f, 0.f, 0.f};
-
-            // Compute an orthographic width to fit the rotated bbox
+            // With centered geometry, aim at the bbox center in XZ but ground it on Y
             const Vector3 bbMin = {selectedRecord.bbMin.x, selectedRecord.bbMin.y, selectedRecord.bbMin.z};
             const Vector3 bbMax = {selectedRecord.bbMax.x, selectedRecord.bbMax.y, selectedRecord.bbMax.z};
             const Vector3 center = CalculateModelCenter(selectedRecord);
+            camera.target = {center.x, bbMin.y, center.z};
             const Vector3 relMin = Vector3Subtract(bbMin, center);
             const Vector3 relMax = Vector3Subtract(bbMax, center);
 
@@ -678,27 +680,21 @@ int main(int argc, char* argv[]) {
                 minY = std::min(minY, r.y);
                 maxY = std::max(maxY, r.y);
             }
-            float width = std::max(maxX - minX, maxY - minY);
-            if (!previewBestFit) {
-                static constexpr float zoomScale[5] = {1.0f / 16.0f, 1.0f / 8.0f, 1.0f / 4.0f, 1.0f / 2.0f, 1.0f};
-                width *= zoomScale[std::clamp(lodZoom, 1, 5) - 1];
-            }
-            // Show more context: push camera framing out to match SC4 viewer sizing
-            constexpr float kBaseMargin = 2.2f;
-            camera.fovy = width * kBaseMargin;
+            const float baseWidth = std::max(maxX - minX, maxY - minY);
+            float width = previewBestFit ? baseWidth * 1.1f : baseWidth;
+            camera.fovy = width;
 
-            // Set camera position along rotated forward vector
-            // Choose camera distance per zoom (farther at lower zooms)
-            // Keep camera within a safe clip range; orthographic size is set by camera.fovy
-            static constexpr float zoomDistance[5] = {800.0f, 650.0f, 500.0f, 360.0f, 260.0f};
-            const float distance = zoomDistance[std::clamp(lodZoom, 1, 5) - 1];
-            // View rotation same as bounds
+            // Set camera position along rotated forward vector (fixed distance; zoom handled by model scale)
+            const float distance = std::max(width * 6.0f, 150.0f);
+            // View rotation same as bounds (SC4 yaw/pitch)
             Matrix rotView = BuildRotation(yaw, pitch, camSwapRotationOrder);
             Vector3 forward = Vector3Transform(Vector3{0, 0, -1}, rotView);
-            // Place camera farther as distance grows (zoom 1 far, zoom 5 near)
             camera.position = Vector3Subtract(camera.target, Vector3Scale(forward, distance));
             camera.up = {0.f, 1.f, 0.f};
             camera.projection = CAMERA_ORTHOGRAPHIC;
+        }
+        else {
+            modelScale = 1.0f;
         }
         if (modelChanged) {
             ReleaseLoadedModel(model);
@@ -724,7 +720,13 @@ int main(int argc, char* argv[]) {
 
         if (model.has_value()) {
             if (disableBackfaceCulling) rlDisableBackfaceCulling();
-            DrawModel(model->model, Vector3Zero(), 1.f, WHITE);
+            if (previewMode) {
+                DrawModelEx(model->model, Vector3Zero(), Vector3{0, 1, 0}, 0.0f,
+                            Vector3{modelScale, modelScale, modelScale}, WHITE);
+            }
+            else {
+                DrawModel(model->model, Vector3Zero(), 1.f, WHITE);
+            }
             if (disableBackfaceCulling) rlEnableBackfaceCulling();
         }
 

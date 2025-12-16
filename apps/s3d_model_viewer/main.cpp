@@ -141,6 +141,7 @@ namespace {
         if (target.rt.id == 0) {
             return false;
         }
+        SetTextureFilter(target.rt.texture, TEXTURE_FILTER_BILINEAR);
         target.width = width;
         target.height = height;
         return true;
@@ -831,7 +832,10 @@ int main(int argc, char* argv[]) {
             ImVec2 avail = ImGui::GetContentRegionAvail();
             const int viewW = std::max(1, static_cast<int>(avail.x));
             const int viewH = std::max(1, static_cast<int>(avail.y));
-            if (EnsureViewTarget(viewportTarget, viewW, viewH)) {
+            const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
+            const int texW = std::max(1, static_cast<int>(avail.x * framebufferScale.x));
+            const int texH = std::max(1, static_cast<int>(avail.y * framebufferScale.y));
+            if (EnsureViewTarget(viewportTarget, texW, texH)) {
                 BeginTextureMode(viewportTarget.rt);
                 ClearBackground(RAYWHITE);
                 BeginMode3D(camera);

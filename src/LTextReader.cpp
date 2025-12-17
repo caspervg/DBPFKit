@@ -123,10 +123,9 @@ namespace LText {
 
         const size_t payloadBytes = buffer.size() - 4;
         const size_t expectedBytes = static_cast<size_t>(charCount) * 2;
-        const bool hasControl = control == kControlChar;
         const bool lengthMatches = payloadBytes == expectedBytes && (payloadBytes % 2 == 0);
 
-        if (!hasControl || !lengthMatches) {
+        if (!lengthMatches) {
             auto fallback = ParseFallback(buffer);
             if (fallback.has_value()) {
                 return fallback;

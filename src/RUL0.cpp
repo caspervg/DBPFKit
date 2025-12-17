@@ -47,17 +47,32 @@ namespace {
 
     template <typename T>
     bool ParseIntAuto(const std::string_view s, T& out) {
+        std::string_view to_parse = s;
         auto base = 10;
         if (s.size() >= 2 && s[0] == '0') {
             if (s[1] == 'x' || s[1] == 'X') {
                 base = 16;
+                to_parse = s.substr(2);
             }
             else {
-                base = 8;
+                auto all_octal_digits = true;
+                for (std::size_t i = 1; i < s.size(); ++i) {
+                    const auto ch = static_cast<unsigned char>(s[i]);
+                    if (!std::isdigit(ch)) {
+                        break;
+                    }
+                    if (ch >= '8') {
+                        all_octal_digits = false;
+                        break;
+                    }
+                }
+                if (all_octal_digits) {
+                    base = 8;
+                }
             }
         }
-        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, base);
-        return ec == std::errc() && ptr == s.data() + s.size();
+        auto [ptr, ec] = std::from_chars(to_parse.data(), to_parse.data() + to_parse.size(), out, base);
+        return ec == std::errc() && ptr == to_parse.data() + to_parse.size();
     }
 
     template <typename T>
@@ -436,7 +451,7 @@ namespace RUL0 {
                 if (ParseIntPair(value,
                                  piece->handleOffset.deltaStraight,
                                  piece->handleOffset.deltaSide)) {
-                    piece->stepOffsets.initialized = true;
+                    piece->handleOffset.initialized = true;
                 }
             }
             else if (EqualsIgnoreCase(keyStr, kStepOffsetsKey)) {

@@ -85,7 +85,7 @@ namespace RUL0 {
 
         // Add preview effect information
         if (effect.initialized) {
-            result += std::format("\n  Preview: pos({}, {}), rot={}°, flip={}",
+            result += std::format("\n  Preview: pos({}, {}), rot={}, flip={}",
                                   effect.x, effect.y, effect.rotation, effect.flip);
         }
 
@@ -228,7 +228,7 @@ namespace RUL0 {
 
                 if (expectChar(',')) {
                     auto mask = nextToken();
-                    nc.hexMask = std::stoul(std::string(mask), nullptr, 16);
+                    nc.hexMask = std::stoul(std::string(mask.substr(0,std::min(mask.length(), 10zu))), nullptr, 16);
                 }
 
                 ct.networks.push_back(nc);
@@ -705,9 +705,9 @@ namespace RUL0 {
         }
     }
 
-    ParseExpected<Record> Parse(std::span<const uint8_t> buffer) {
+    ParseExpected<Record> Parse(const std::span<const uint8_t> buffer) {
         Record data;
-        auto text = reinterpret_cast<const char*>(buffer.data());
+        const auto text = reinterpret_cast<const char*>(buffer.data());
         const int parseResult = ini_parse_string_length(text, buffer.size(), IniHandler, &data);
         if (parseResult != 0) {
             if (parseResult > 0) {

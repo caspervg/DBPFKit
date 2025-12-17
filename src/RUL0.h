@@ -1,8 +1,11 @@
 #pragma once
 #include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -11,6 +14,7 @@
 namespace RUL0 {
 
     constexpr auto kListDelimiter = ',';
+    constexpr auto kCommentPrefix = ';';
 
     constexpr auto kOrderingSection = "Ordering";
     constexpr auto kRotationRingKey = "RotationRing";
@@ -24,8 +28,8 @@ namespace RUL0 {
     constexpr auto kCheckTypeKey = "CheckType";
     constexpr auto kAutoTileBaseKey = "AutoTileBase";
     constexpr auto kAutoPathBaseKey = "AutoPathBase";
-    constexpr auto kPlaceQueryIdKey = "PlaceQueryId";
-    constexpr auto kConvertQueryIdKey = "ConvertQueryId";
+    constexpr auto kPlaceQueryIdKey = "PlaceQueryID";
+    constexpr auto kConvertQueryIdKey = "ConvertQueryID";
     constexpr auto kCostsKey = "Costs";
     constexpr auto kAutoPlaceKey = "AutoPlace";
     constexpr auto kOneWayDirKey = "OneWayDir";
@@ -36,6 +40,53 @@ namespace RUL0 {
     constexpr auto kTransposeKey = "Transpose";
     constexpr auto kTranslateKey = "Translate";
     constexpr auto kReplacementIntersectionKey = "ReplacementIntersection";
+
+    namespace ParseHelpers {
+        std::string_view Trim(std::string_view s);
+
+        template <typename T>
+        bool ParseInt(std::string_view s, T& out) {
+            s = Trim(s);
+            const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
+            return ec == std::errc() && ptr == s.data() + s.size();
+        }
+
+        template <typename T>
+        bool ParseIntAuto(std::string_view s, T& out) {
+            s = Trim(s);
+            std::string_view toParse = s;
+            int base = 10;
+            if (s.size() >= 2 && s[0] == '0') {
+                if (s[1] == 'x' || s[1] == 'X') {
+                    base = 16;
+                    toParse = s.substr(2);
+                }
+                else {
+                    // Match %i semantics: leading zero => octal, even if later digits are invalid
+                    base = 8;
+                }
+            }
+            const auto [ptr, ec] = std::from_chars(toParse.data(), toParse.data() + toParse.size(), out, base);
+            return ec == std::errc() && ptr == toParse.data() + toParse.size();
+        }
+
+        bool ParseFloat(std::string_view s, float& out);
+
+        bool ParseHex(std::string_view s, uint32_t& out);
+
+        template <typename A, typename B>
+        bool ParseIntPair(std::string_view s, A& a, B& b) {
+            const auto comma = s.find(kListDelimiter);
+            if (comma == std::string_view::npos) {
+                return false;
+            }
+            return ParseInt(s.substr(0, comma), a) &&
+                ParseInt(s.substr(comma + 1), b);
+        }
+
+        bool EqualsIgnoreCase(std::string_view a, std::string_view b);
+        bool StartsWithIgnoreCase(std::string_view text, std::string_view prefix);
+    }
 
     // From @Pixelchemist on StackOverflow: https://stackoverflow.com/a/42198760
     template <typename T>

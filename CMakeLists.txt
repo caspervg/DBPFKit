@@ -76,11 +76,15 @@ endif()
 # Test executable
 add_executable(DBPFKitTests
     tests/tests.cpp
+    tests/parse_helpers_tests.cpp
 )
 target_link_libraries(DBPFKitTests PRIVATE
     DBPFKitLib
     libsquish::Squish
     Catch2::Catch2WithMain
+)
+target_compile_definitions(
+        DBPFKitLib PUBLIC INI_MAX_LINE=1000
 )
 
 # Enable testing

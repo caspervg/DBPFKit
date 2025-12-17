@@ -82,6 +82,9 @@ target_link_libraries(DBPFKitTests PRIVATE
     libsquish::Squish
     Catch2::Catch2WithMain
 )
+target_compile_definitions(
+        DBPFKitLib PUBLIC INI_MAX_LINE=1000
+)
 
 # Enable testing
 enable_testing()

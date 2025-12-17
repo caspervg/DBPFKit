@@ -10,7 +10,32 @@
 #include "ParseTypes.h"
 #include "ini.h"
 
-namespace {
+namespace RUL0::ParseHelpers {
+    std::string_view Trim(std::string_view s) {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+            s.remove_prefix(1);
+        }
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+            s.remove_suffix(1);
+        }
+        return s;
+    }
+
+    bool ParseFloat(std::string_view s, float& out) {
+        s = Trim(s);
+        const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, std::chars_format::general);
+        return ec == std::errc() && ptr == s.data() + s.size();
+    }
+
+    bool ParseHex(std::string_view s, uint32_t& out) {
+        s = Trim(s);
+        if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+            s = s.substr(2);
+        }
+        const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, 16);
+        return ec == std::errc() && ptr == s.data() + s.size();
+    }
+
     bool EqualsIgnoreCase(const std::string_view a, const std::string_view b) {
         if (a.size() != b.size()) {
             return false;
@@ -38,69 +63,10 @@ namespace {
         }
         return true;
     }
+}
 
-    std::string_view Trim(std::string_view s) {
-        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
-        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
-        return s;
-    }
-
-    template <typename T>
-    bool ParseIntAuto(const std::string_view s, T& out) {
-        std::string_view to_parse = s;
-        auto base = 10;
-        if (s.size() >= 2 && s[0] == '0') {
-            if (s[1] == 'x' || s[1] == 'X') {
-                base = 16;
-                to_parse = s.substr(2);
-            }
-            else {
-                auto all_octal_digits = true;
-                for (std::size_t i = 1; i < s.size(); ++i) {
-                    const auto ch = static_cast<unsigned char>(s[i]);
-                    if (!std::isdigit(ch)) {
-                        break;
-                    }
-                    if (ch >= '8') {
-                        all_octal_digits = false;
-                        break;
-                    }
-                }
-                if (all_octal_digits) {
-                    base = 8;
-                }
-            }
-        }
-        auto [ptr, ec] = std::from_chars(to_parse.data(), to_parse.data() + to_parse.size(), out, base);
-        return ec == std::errc() && ptr == to_parse.data() + to_parse.size();
-    }
-
-    template <typename T>
-    bool ParseInt(std::string_view s, T& out) {
-        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
-        return ec == std::errc() && ptr == s.data() + s.size();
-    }
-
-    bool ParseFloat(std::string_view s, float& out) {
-        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, std::chars_format::general);
-        return ec == std::errc() && ptr == s.data() + s.size();
-    }
-
-    bool ParseHex(std::string_view s, uint32_t& out) {
-        if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-            s = s.substr(2);
-        }
-        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, 16);
-        return ec == std::errc() && ptr == s.data() + s.size();
-    }
-
-    template <typename A, typename B>
-    bool ParseIntPair(std::string_view s, A& a, B& b) {
-        const auto comma = s.find(RUL0::kListDelimiter);
-        if (comma == std::string_view::npos) return false;
-        return ParseInt(Trim(s.substr(0, comma)), a) &&
-            ParseInt(Trim(s.substr(comma + 1)), b);
-    }
+namespace {
+    using namespace RUL0::ParseHelpers;
 }
 
 namespace RUL0 {

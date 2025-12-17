@@ -1,13 +1,92 @@
 #include "RUL0.h"
 
+#include <cctype>
+#include <charconv>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <format>
 #include <ranges>
 
 #include "ParseTypes.h"
 #include "ini.h"
+
+namespace {
+    bool EqualsIgnoreCase(const std::string_view a, const std::string_view b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < a.size(); ++i) {
+            const auto ca = static_cast<unsigned char>(a[i]);
+            const auto cb = static_cast<unsigned char>(b[i]);
+            if (std::tolower(ca) != std::tolower(cb)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool StartsWithIgnoreCase(const std::string_view text, const std::string_view prefix) {
+        if (prefix.size() > text.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < prefix.size(); ++i) {
+            const auto ct = static_cast<unsigned char>(text[i]);
+            const auto cp = static_cast<unsigned char>(prefix[i]);
+            if (std::tolower(ct) != std::tolower(cp)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string_view Trim(std::string_view s) {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+        return s;
+    }
+
+    template <typename T>
+    bool ParseIntAuto(const std::string_view s, T& out) {
+        auto base = 10;
+        if (s.size() >= 2 && s[0] == '0') {
+            if (s[1] == 'x' || s[1] == 'X') {
+                base = 16;
+            }
+            else {
+                base = 8;
+            }
+        }
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, base);
+        return ec == std::errc() && ptr == s.data() + s.size();
+    }
+
+    template <typename T>
+    bool ParseInt(std::string_view s, T& out) {
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
+        return ec == std::errc() && ptr == s.data() + s.size();
+    }
+
+    bool ParseFloat(std::string_view s, float& out) {
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, std::chars_format::general);
+        return ec == std::errc() && ptr == s.data() + s.size();
+    }
+
+    bool ParseHex(std::string_view s, uint32_t& out) {
+        if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+            s = s.substr(2);
+        }
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out, 16);
+        return ec == std::errc() && ptr == s.data() + s.size();
+    }
+
+    template <typename A, typename B>
+    bool ParseIntPair(std::string_view s, A& a, B& b) {
+        const auto comma = s.find(RUL0::kListDelimiter);
+        if (comma == std::string_view::npos) return false;
+        return ParseInt(Trim(s.substr(0, comma)), a) &&
+            ParseInt(Trim(s.substr(comma + 1)), b);
+    }
+}
 
 namespace RUL0 {
     // Convert PuzzlePiece to human-readable string representation
@@ -153,10 +232,29 @@ namespace RUL0 {
         int rotation, flip; // The game reads these as %i (which can also be octal or hexadecimal format), so we do too
         uint32_t instanceId;
         std::string name;
-        const auto res = sscanf(value.data(), "%f, %f, %i, %i, 0x%x", &x, &y, &rotation, &flip, &instanceId);
-        if (res != 5) {
+
+        std::string_view parts[5];
+        size_t count = 0;
+        size_t start = 0;
+        size_t semi = value.find(kCommentPrefix);
+        if (semi != std::string_view::npos) {
+            value = value.substr(0, semi);
+        }
+
+        while (start < value.size() && count < 5) {
+            size_t comma = value.find(kListDelimiter, start);
+            if (comma == std::string_view::npos) comma = value.size();
+            parts[count++] = Trim(value.substr(start, comma - start));
+            start = comma + 1;
+        }
+        if (count != 5) return false;
+
+        if (!ParseFloat(parts[0], x) || !ParseFloat(parts[1], y) ||
+            !ParseIntAuto(parts[2], rotation) || !ParseIntAuto(parts[3], flip) ||
+            !ParseHex(parts[4], instanceId)) {
             return false;
         }
+
         previewEffect.initialized = true;
         previewEffect.x = x;
         previewEffect.y = y;
@@ -228,7 +326,7 @@ namespace RUL0 {
 
                 if (expectChar(',')) {
                     auto mask = nextToken();
-                    nc.hexMask = std::stoul(std::string(mask.substr(0,std::min(mask.length(), 10zu))), nullptr, 16);
+                    nc.hexMask = std::stoul(std::string(mask.substr(0, std::min(mask.length(), 10zu))), nullptr, 16);
                 }
 
                 ct.networks.push_back(nc);
@@ -245,13 +343,13 @@ namespace RUL0 {
         const auto valStr = std::string_view(value);
 
         // We are either in the Ordering section or in a sectionless preamble
-        if (secStr == kOrderingSection || secStr.empty()) {
-            if (keyStr == kRotationRingKey) {
+        if (EqualsIgnoreCase(secStr, kOrderingSection) || secStr.empty()) {
+            if (EqualsIgnoreCase(keyStr, kRotationRingKey)) {
                 // Start a new ordering when we discovered a new RotationRing entry
                 data->orderings.emplace_back();
                 data->orderings.back().rotationRing = ParseIdList(valStr);
             }
-            else if (keyStr == kAddTypesKey) {
+            else if (EqualsIgnoreCase(keyStr, kAddTypesKey)) {
                 if (data->orderings.empty()) {
                     // Malformed RUL0: AddTypes before RotationRing
                     return 0;
@@ -267,7 +365,7 @@ namespace RUL0 {
         }
 
         // We have found a HighwayIntersectionInfo section
-        if (secStr.starts_with(kIntersectionInfoPrefix)) {
+        if (StartsWithIgnoreCase(secStr, kIntersectionInfoPrefix)) {
             const uint32_t id = ParsePieceId(secStr);
 
             // We are starting a new puzzle piece
@@ -279,32 +377,31 @@ namespace RUL0 {
 
             auto* piece = data->currentPiece;
 
-            if (keyStr == kPieceKey) {
+            if (EqualsIgnoreCase(keyStr, kPieceKey)) {
                 ParsePieceValue(valStr, piece->effect);
             }
-            else if (keyStr == kPreviewEffectKey) {
+            else if (EqualsIgnoreCase(keyStr, kPreviewEffectKey)) {
                 piece->effect.name = std::string(valStr);
             }
-            else if (keyStr == kCellLayoutKey) {
-                piece->cellLayout.push_back(std::string(valStr));
+            else if (EqualsIgnoreCase(keyStr, kCellLayoutKey)) {
+                piece->cellLayout.emplace_back(valStr);
             }
-            else if (keyStr == kCheckTypeKey) {
+            else if (EqualsIgnoreCase(keyStr, kCheckTypeKey)) {
                 piece->checkTypes.push_back(ParseCheckType(valStr));
             }
-            else if (keyStr == kConsLayoutKey) {
-                piece->consLayout.push_back(std::string(valStr));
+            else if (EqualsIgnoreCase(keyStr, kConsLayoutKey)) {
+                piece->consLayout.emplace_back(valStr);
             }
-            else if (keyStr == kAutoPathBaseKey) {
+            else if (EqualsIgnoreCase(keyStr, kAutoPathBaseKey)) {
                 piece->autoPathBase = std::strtoul(value, nullptr, 16);
             }
-            else if (keyStr == kAutoTileBaseKey) {
+            else if (EqualsIgnoreCase(keyStr, kAutoTileBaseKey)) {
                 piece->autoTileBase = std::strtoul(value, nullptr, 16);
             }
-            else if (keyStr == kReplacementIntersectionKey) {
+            else if (StartsWithIgnoreCase(keyStr, kReplacementIntersectionKey)) {
                 int replRotation;
                 uint32_t replFlip;
-                auto const ret = sscanf(value, "%d, %d", &replRotation, &replFlip);
-                if (ret != 2) {
+                if (!ParseIntPair(value, replRotation, replFlip)) {
                     // Invalid ReplacementIntersection format
                     return 0;
                 }
@@ -318,44 +415,38 @@ namespace RUL0 {
                     replFlip
                 };
             }
-            else if (keyStr == kPlaceQueryIdKey) {
+            else if (EqualsIgnoreCase(keyStr, kPlaceQueryIdKey)) {
                 piece->placeQueryId = std::strtoul(value, nullptr, 16);
             }
-            else if (keyStr == kCostsKey) {
-                if (valStr.size() > 0) {
+            else if (EqualsIgnoreCase(keyStr, kCostsKey)) {
+                if (!valStr.empty()) {
                     piece->costs = std::stoi(value);
                 }
                 else {
                     piece->costs = 0;
                 }
             }
-            else if (keyStr == kConvertQueryIdKey) {
+            else if (EqualsIgnoreCase(keyStr, kConvertQueryIdKey)) {
                 piece->convertQueryId = std::strtoul(value, nullptr, 16);
             }
-            else if (keyStr == kAutoPlaceKey) {
+            else if (EqualsIgnoreCase(keyStr, kAutoPlaceKey)) {
                 piece->autoPlace = (std::stoi(value) != 0);
             }
-            else if (keyStr == kHandleOffsetKey) {
-                const auto ret = sscanf(value,
-                                          "%d, %d",
-                                          &piece->handleOffset.deltaStraight,
-                                          &piece->handleOffset.deltaSide
-                    );
-                if (ret == 2) {
+            else if (EqualsIgnoreCase(keyStr, kHandleOffsetKey)) {
+                if (ParseIntPair(value,
+                                 piece->handleOffset.deltaStraight,
+                                 piece->handleOffset.deltaSide)) {
                     piece->stepOffsets.initialized = true;
                 }
             }
-            else if (keyStr == kStepOffsetsKey) {
-                const auto ret = sscanf(value,
-                                          "%d, %d",
-                                          &piece->stepOffsets.dragStartThreshold,
-                                          &piece->stepOffsets.dragCompletionOffset
-                    );
-                if (ret == 2) {
+            else if (EqualsIgnoreCase(keyStr, kStepOffsetsKey)) {
+                if (ParseIntPair(value,
+                                 piece->stepOffsets.dragStartThreshold,
+                                 piece->stepOffsets.dragCompletionOffset)) {
                     piece->stepOffsets.initialized = true;
                 }
             }
-            else if (keyStr == kOneWayDirKey) {
+            else if (EqualsIgnoreCase(keyStr, kOneWayDirKey)) {
                 const auto val = std::stoi(value);
                 if (val < +OneWayDir::WEST || val > +OneWayDir::SOUTH_WEST) {
                     // Invalid OneWayDir value
@@ -363,11 +454,11 @@ namespace RUL0 {
                 }
                 piece->oneWayDir = static_cast<OneWayDir>(val);
             }
-            else if (keyStr == kCopyFromKey) {
+            else if (EqualsIgnoreCase(keyStr, kCopyFromKey)) {
                 piece->copyFrom = std::strtoul(value, nullptr, 16);
                 // TODO: Actually do something with this!
             }
-            else if (keyStr == kRotateKey) {
+            else if (EqualsIgnoreCase(keyStr, kRotateKey)) {
                 const auto val = std::stoi(value);
                 if (val < +Rotation::ROT_0 || val > +Rotation::ROT_270) {
                     // Invalid rotation value
@@ -375,12 +466,14 @@ namespace RUL0 {
                 }
                 piece->rotate = static_cast<Rotation>(val);
             }
-            else if (keyStr == kTransposeKey) {
+            else if (EqualsIgnoreCase(keyStr, kTransposeKey)) {
                 piece->transpose = (std::stoi(value) != 0);
             }
-            else if (keyStr == kTranslateKey) {
+            else if (EqualsIgnoreCase(keyStr, kTranslateKey)) {
                 // This key is not documented, but present in SC4 game decompilation, so included.
-                sscanf(value, "%d, %d", &piece->translate.x, &piece->translate.z);
+                if (ParseIntPair(value, piece->translate.x, piece->translate.z)) {
+                    piece->translate.initialized = true;
+                }
             }
             else {
                 // Malformed RUL0: Unknown key in HighwayIntersectionInfo section
@@ -718,5 +811,4 @@ namespace RUL0 {
         BuildNavigationIndices(data);
         return data;
     }
-
 }

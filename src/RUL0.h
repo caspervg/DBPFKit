@@ -11,6 +11,7 @@
 namespace RUL0 {
 
     constexpr auto kListDelimiter = ',';
+    constexpr auto kCommentPrefix = ';';
 
     constexpr auto kOrderingSection = "Ordering";
     constexpr auto kRotationRingKey = "RotationRing";
@@ -24,8 +25,8 @@ namespace RUL0 {
     constexpr auto kCheckTypeKey = "CheckType";
     constexpr auto kAutoTileBaseKey = "AutoTileBase";
     constexpr auto kAutoPathBaseKey = "AutoPathBase";
-    constexpr auto kPlaceQueryIdKey = "PlaceQueryId";
-    constexpr auto kConvertQueryIdKey = "ConvertQueryId";
+    constexpr auto kPlaceQueryIdKey = "PlaceQueryID";
+    constexpr auto kConvertQueryIdKey = "ConvertQueryID";
     constexpr auto kCostsKey = "Costs";
     constexpr auto kAutoPlaceKey = "AutoPlace";
     constexpr auto kOneWayDirKey = "OneWayDir";

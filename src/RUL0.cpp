@@ -70,6 +70,132 @@ namespace {
 }
 
 namespace RUL0 {
+    namespace {
+        Grid NormalizeGrid(const Grid& grid, const char fillChar = kEmptyLayoutCell) {
+            if (grid.empty()) {
+                return {};
+            }
+
+            size_t width = 0;
+            for (const auto& row : grid) {
+                width = std::max(width, row.size());
+            }
+
+            Grid normalized;
+            normalized.reserve(grid.size());
+            for (const auto& row : grid) {
+                std::string padded(width, fillChar);
+                std::copy(row.begin(), row.end(), padded.begin());
+                normalized.push_back(std::move(padded));
+            }
+            return normalized;
+        }
+
+        Grid RotateGrid90Clockwise(const Grid& grid, const char fillChar = kEmptyLayoutCell) {
+            Grid normalized = NormalizeGrid(grid, fillChar);
+            if (normalized.empty()) {
+                return normalized;
+            }
+
+            const size_t height = normalized.size();
+            const size_t width = normalized.front().size();
+            Grid rotated(width, std::string(height, fillChar));
+
+            for (size_t y = 0; y < height; ++y) {
+                for (size_t x = 0; x < width; ++x) {
+                    rotated[x][height - 1 - y] = normalized[y][x];
+                }
+            }
+
+            return rotated;
+        }
+
+        Grid RotateGrid(const Grid& grid, int times, const char fillChar = kEmptyLayoutCell) {
+            times = ((times % 4) + 4) % 4;
+            Grid rotated = NormalizeGrid(grid, fillChar);
+            for (int i = 0; i < times; ++i) {
+                rotated = RotateGrid90Clockwise(rotated, fillChar);
+            }
+            return rotated;
+        }
+
+        Grid TransposeGrid(const Grid& grid, const char fillChar = kEmptyLayoutCell) {
+            Grid normalized = NormalizeGrid(grid, fillChar);
+            if (normalized.empty()) {
+                return normalized;
+            }
+
+            const size_t height = normalized.size();
+            const size_t width = normalized.front().size();
+            Grid transposed(width, std::string(height, fillChar));
+
+            for (size_t y = 0; y < height; ++y) {
+                for (size_t x = 0; x < width; ++x) {
+                    transposed[x][y] = normalized[y][x];
+                }
+            }
+
+            return transposed;
+        }
+
+        Grid TranslateGrid(const Grid& grid, const uint32_t deltaX, const uint32_t deltaZ,
+                           const char fillChar = kEmptyLayoutCell) {
+            Grid normalized = NormalizeGrid(grid, fillChar);
+            if (normalized.empty() || (deltaX == 0 && deltaZ == 0)) {
+                return normalized;
+            }
+
+            const size_t height = normalized.size();
+            const size_t width = normalized.front().size();
+
+            Grid translated(height + deltaZ, std::string(width + deltaX, fillChar));
+            for (size_t y = 0; y < height; ++y) {
+                for (size_t x = 0; x < width; ++x) {
+                    translated[y + deltaZ][x + deltaX] = normalized[y][x];
+                }
+            }
+
+            return translated;
+        }
+
+        uint32_t TransposeEdgeFlags(const uint32_t flags) {
+            const uint32_t south = (flags >> 24) & 0xFF;
+            const uint32_t east = (flags >> 16) & 0xFF;
+            const uint32_t north = (flags >> 8) & 0xFF;
+            const uint32_t west = flags & 0xFF;
+
+            const uint32_t newSouth = east;
+            const uint32_t newEast = south;
+            const uint32_t newNorth = west;
+            const uint32_t newWest = north;
+
+            return (newSouth << 24) | (newEast << 16) | (newNorth << 8) | newWest;
+        }
+
+        OneWayDir TransposeOneWayDir(const OneWayDir dir) {
+            switch (dir) {
+            case OneWayDir::WEST:
+                return OneWayDir::NORTH;
+            case OneWayDir::NORTH_WEST:
+                return OneWayDir::NORTH_WEST;
+            case OneWayDir::NORTH:
+                return OneWayDir::WEST;
+            case OneWayDir::NORTH_EAST:
+                return OneWayDir::SOUTH_WEST;
+            case OneWayDir::EAST:
+                return OneWayDir::SOUTH;
+            case OneWayDir::SOUTH_EAST:
+                return OneWayDir::SOUTH_EAST;
+            case OneWayDir::SOUTH:
+                return OneWayDir::EAST;
+            case OneWayDir::SOUTH_WEST:
+                return OneWayDir::NORTH_EAST;
+            default:
+                return dir;
+            }
+        }
+    }
+
     // Convert PuzzlePiece to human-readable string representation
     std::string PuzzlePiece::ToString() const {
         std::string result = std::format("Piece 0x{:08X}", id);
@@ -182,6 +308,44 @@ namespace RUL0 {
         }
 
         return result;
+    }
+
+    Grid PuzzlePiece::NormalizedCellLayout(const char fillChar) const {
+        return NormalizeGrid(cellLayout, fillChar);
+    }
+
+    Grid PuzzlePiece::NormalizedConsLayout(const char fillChar) const {
+        return NormalizeGrid(consLayout, fillChar);
+    }
+
+    LayoutSample PuzzlePiece::SampleLayout(const size_t row, const size_t col,
+                                           const char fillChar) const {
+        LayoutSample sample{};
+        sample.row = row;
+        sample.col = col;
+
+        const Grid normCell = NormalizeGrid(cellLayout, fillChar);
+        if (!normCell.empty() && row < normCell.size() && col < normCell.front().size()) {
+            sample.cell = normCell[row][col];
+            sample.hasCell = true;
+        }
+
+        const Grid normCons = NormalizeGrid(consLayout, fillChar);
+        if (!normCons.empty() && row < normCons.size() && col < normCons.front().size()) {
+            sample.cons = normCons[row][col];
+            sample.hasCons = true;
+        }
+
+        if (sample.hasCell && sample.cell != fillChar) {
+            for (const auto& checkType : checkTypes) {
+                if (checkType.symbol == sample.cell) {
+                    sample.checkType = &checkType;
+                    break;
+                }
+            }
+        }
+
+        return sample;
     }
 
     uint32_t ParsePieceId(std::string_view section) {
@@ -437,7 +601,7 @@ namespace RUL0 {
             }
             else if (EqualsIgnoreCase(keyStr, kCopyFromKey)) {
                 piece->copyFrom = std::strtoul(value, nullptr, 16);
-                // TODO: Actually do something with this!
+                piece->requestedTransform.copyFrom = piece->copyFrom;
             }
             else if (EqualsIgnoreCase(keyStr, kRotateKey)) {
                 const auto val = std::stoi(value);
@@ -446,14 +610,17 @@ namespace RUL0 {
                     return 0;
                 }
                 piece->rotate = static_cast<Rotation>(val);
+                piece->requestedTransform.rotate = piece->rotate;
             }
             else if (EqualsIgnoreCase(keyStr, kTransposeKey)) {
                 piece->transpose = (std::stoi(value) != 0);
+                piece->requestedTransform.transpose = piece->transpose;
             }
             else if (EqualsIgnoreCase(keyStr, kTranslateKey)) {
                 // This key is not documented, but present in SC4 game decompilation, so included.
                 if (ParseIntPair(value, piece->translate.x, piece->translate.z)) {
                     piece->translate.initialized = true;
+                    piece->requestedTransform.translate = piece->translate;
                 }
             }
             else {
@@ -497,101 +664,6 @@ namespace RUL0 {
         return (flags << shiftBits) | (flags >> (32 - shiftBits));
     }
 
-    // RotateConstraint: Map constraint bytes to rotated equivalents
-    // Based on SC4's RotateConstraint decompilation
-    uint8_t RotateConstraint(uint8_t constraint) {
-        if (constraint == 4) {
-            return 3;
-        }
-        else if (constraint < 4) {
-            if (constraint == 2) {
-                return 1;
-            }
-            else if (constraint < 2) {
-                if (constraint != 0) {
-                    return 2;
-                }
-            }
-            else {
-                return 4;
-            }
-        }
-        else if (constraint == 6) {
-            return 5;
-        }
-        else if (constraint < 6) {
-            return 6;
-        }
-        return constraint;
-    }
-
-    // RotateMap: Rotate a byte map (grid) with optional constraint rotation
-    // Based on SC4's RotateMap decompilation
-    //
-    // UNCERTAIN ASPECTS:
-    // - The exact memory layout and how dimensions are used
-    // - Whether centerX/centerY are grid coordinates or offsets
-    // - The precise order of transpose vs flip operations in 90° rotation
-    // - Whether the constraint rotation only applies to specific cell types
-    //
-    // The logic appears to be:
-    // 1. If bit 2 set (180°): flip the entire map and negate center coords
-    // 2. If bit 1 set (90°): transpose and rotate, optionally rotating constraints
-    void RotateMap(std::vector<uint8_t>& mapData, int& width, int& height, int& centerX, int& centerY,
-                   int rotation, bool rotateConstraints) {
-        rotation = rotation & 3; // Normalize to 0-3
-
-        if (rotation == 0 || mapData.empty()) {
-            return;
-        }
-
-        // Handle 180° rotation (bit 2 set)
-        if ((rotation & 2) != 0) {
-            centerX = (width - 1) - centerX;
-            centerY = (height - 1) - centerY;
-
-            // Reverse the entire linear map
-            std::reverse(mapData.begin(), mapData.end());
-        }
-
-        // Handle 90° rotation (bit 1 set)
-        if ((rotation & 1) != 0) {
-            std::vector<uint8_t> rotated(mapData.size());
-            int newWidth = height;
-            int newHeight = width;
-
-            // GUESS: Based on decompilation, transpose with constraint rotation
-            // The decompilation shows: new[x + y*newWidth] = old[(height-1-y) + x*width]
-            // This is a 90° CW rotation
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    int oldIdx = y * width + x;
-                    int newX = height - 1 - y;
-                    int newY = x;
-                    int newIdx = newY * newWidth + newX;
-
-                    if (rotateConstraints) {
-                        rotated[newIdx] = RotateConstraint(mapData[oldIdx]);
-                    }
-                    else {
-                        rotated[newIdx] = mapData[oldIdx];
-                    }
-                }
-            }
-
-            mapData = rotated;
-
-            // Update dimensions
-            std::swap(width, height);
-
-            // Update center position after rotation
-            // GUESS: Based on decompilation centerX/centerY swap and negation
-            int oldCenterX = centerX;
-            centerX = newHeight - 1 - centerY;
-            centerY = oldCenterX;
-        }
-    }
-
     // Copy all data from source piece to destination piece
     // Preserves the destination's ID and its PlaceQueryID
     void CopyPuzzlePiece(const PuzzlePiece& source, PuzzlePiece& dest) {
@@ -619,17 +691,20 @@ namespace RUL0 {
     // Apply rotation transformation to piece
     // Rotates grids, edge flags, constraints, preview effect, and OneWayDir
     // Based on SC4's Rotate method decompilation
-    void ApplyRotation(PuzzlePiece& piece, Rotation rotation) {
+    void ApplyRotation(PuzzlePiece& piece, const Rotation rotation) {
         if (rotation == Rotation::NONE || rotation == Rotation::ROT_0) {
             return;
         }
 
         const int times = +rotation; // Convert enum to int (0-3)
 
-        // NOTE: cellLayout and consLayout in our parser are stored as strings (grid rows)
-        // SC4 uses byte maps. We need to convert our string grids to byte maps for RotateMap
-        // UNCERTAIN: How to map string grids to byte maps and back
-        // For now, we'll rotate the preview effect as a proxy
+        // Rotate layouts
+        if (!piece.cellLayout.empty()) {
+            piece.cellLayout = RotateGrid(piece.cellLayout, times);
+        }
+        if (!piece.consLayout.empty()) {
+            piece.consLayout = RotateGrid(piece.consLayout, times);
+        }
 
         // Rotate preview effect position and rotation
         if (piece.effect.initialized) {
@@ -640,8 +715,6 @@ namespace RUL0 {
         }
 
         // Rotate OneWayDir if set
-        // Based on SC4 decompilation: direction += rotation (or -= if inverted flag is set)
-        // UNCERTAIN: Whether the inversion flag applies and exact mapping
         if (piece.oneWayDir != OneWayDir::NONE) {
             // OneWayDir has 8 directions (0-7), rotate by 2 positions per rotation unit
             int dirValue = +piece.oneWayDir;
@@ -672,55 +745,29 @@ namespace RUL0 {
             return;
         }
 
-        // Transpose is a diagonal flip of the grids
-        // UNCERTAIN: Exact semantics - whether it's diagonal flip or mirror
-        // For string grids, we can swap rows with columns
-
-        // Transpose cellLayout
         if (!piece.cellLayout.empty()) {
-            // Find the maximum column size across all rows
-            size_t maxCols = 0;
-            for (const auto& row : piece.cellLayout) {
-                maxCols = std::max(maxCols, row.size());
-            }
-
-            if (maxCols > 0) {
-                const auto rows = piece.cellLayout.size();
-                std::vector transposed(maxCols, std::string(rows, ' '));
-
-                for (auto row = 0; row < rows; ++row) {
-                    for (auto col = 0; col < piece.cellLayout[row].size(); ++col) {
-                        transposed[col][row] = piece.cellLayout[row][col];
-                    }
-                }
-                piece.cellLayout = transposed;
-            }
+            piece.cellLayout = TransposeGrid(piece.cellLayout);
         }
 
-        // Transpose consLayout
         if (!piece.consLayout.empty()) {
-            // Find the maximum column size across all rows
-            size_t maxCols = 0;
-            for (const auto& row : piece.consLayout) {
-                maxCols = std::max(maxCols, row.size());
-            }
-
-            if (maxCols > 0) {
-                const auto rows = piece.consLayout.size();
-                std::vector transposed(maxCols, std::string(rows, ' '));
-
-                for (auto row = 0; row < rows; ++row) {
-                    for (size_t col = 0; col < piece.consLayout[row].size(); ++col) {
-                        transposed[col][row] = piece.consLayout[row][col];
-                    }
-                }
-                piece.consLayout = transposed;
-            }
+            piece.consLayout = TransposeGrid(piece.consLayout);
         }
 
         // Update effect flip state
         if (piece.effect.initialized) {
+            std::swap(piece.effect.x, piece.effect.y);
             piece.effect.flip = (piece.effect.flip == 0) ? 1 : 0;
+        }
+
+        if (piece.oneWayDir != OneWayDir::NONE) {
+            piece.oneWayDir = TransposeOneWayDir(piece.oneWayDir);
+        }
+
+        for (auto& checkType : piece.checkTypes) {
+            for (auto& network : checkType.networks) {
+                network.ruleFlagByte = TransposeEdgeFlags(network.ruleFlagByte);
+                network.hexMask = TransposeEdgeFlags(network.hexMask);
+            }
         }
 
         // Clear the transpose flag since we've applied it
@@ -731,6 +778,13 @@ namespace RUL0 {
     void ApplyTranslation(PuzzlePiece& piece) {
         if (!piece.translate.initialized) {
             return;
+        }
+
+        if (!piece.cellLayout.empty()) {
+            piece.cellLayout = TranslateGrid(piece.cellLayout, piece.translate.x, piece.translate.z);
+        }
+        if (!piece.consLayout.empty()) {
+            piece.consLayout = TranslateGrid(piece.consLayout, piece.translate.x, piece.translate.z);
         }
 
         // Apply translation to preview effect position
@@ -761,6 +815,12 @@ namespace RUL0 {
         for (uint32_t id : pieceIds) {
             auto& piece = data.puzzlePieces[id];
 
+            // Snapshot requested transform before we mutate fields
+            piece.requestedTransform.copyFrom = piece.copyFrom;
+            piece.requestedTransform.rotate = piece.rotate;
+            piece.requestedTransform.transpose = piece.transpose;
+            piece.requestedTransform.translate = piece.translate;
+
             // If this piece copies from another, copy the source data first
             if (piece.copyFrom != 0) {
                 auto it = data.puzzlePieces.find(piece.copyFrom);
@@ -771,6 +831,8 @@ namespace RUL0 {
                     piece.id = id; // Ensure ID is not overwritten
                 }
             }
+
+            piece.appliedTransform = piece.requestedTransform;
 
             // Apply transformations in order: Rotate -> Transpose -> Translate
             ApplyRotation(piece, piece.rotate);

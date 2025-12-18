@@ -40,6 +40,9 @@ namespace RUL0 {
     constexpr auto kTransposeKey = "Transpose";
     constexpr auto kTranslateKey = "Translate";
     constexpr auto kReplacementIntersectionKey = "ReplacementIntersection";
+    constexpr char kEmptyLayoutCell = '.';
+
+    using Grid = std::vector<std::string>;
 
     namespace ParseHelpers {
         std::string_view Trim(std::string_view s);
@@ -202,6 +205,13 @@ namespace RUL0 {
         uint32_t z;
     };
 
+    struct TransformSpec {
+        uint32_t copyFrom = 0;
+        Rotation rotate = Rotation::NONE;
+        Translation translate = Translation{};
+        bool transpose = false;
+    };
+
     struct HandleOffset {
         bool initialized = false;
         int32_t deltaStraight;
@@ -212,6 +222,16 @@ namespace RUL0 {
         bool initialized = false;
         uint32_t dragStartThreshold; // Likely unused?
         uint32_t dragCompletionOffset;
+    };
+
+    struct LayoutSample {
+        size_t row = 0;
+        size_t col = 0;
+        char cell = kEmptyLayoutCell;
+        const CheckType* checkType = nullptr;
+        char cons = kEmptyLayoutCell;
+        bool hasCell = false;
+        bool hasCons = false;
     };
 
     struct PuzzlePiece {
@@ -242,7 +262,14 @@ namespace RUL0 {
         Translation translate = Translation{};
         bool transpose = false;
 
+        TransformSpec requestedTransform = TransformSpec{};
+        TransformSpec appliedTransform = TransformSpec{};
+
         [[nodiscard]] std::string ToString() const;
+        [[nodiscard]] Grid NormalizedCellLayout(char fillChar = kEmptyLayoutCell) const;
+        [[nodiscard]] Grid NormalizedConsLayout(char fillChar = kEmptyLayoutCell) const;
+        [[nodiscard]] LayoutSample SampleLayout(size_t row, size_t col,
+                                                char fillChar = kEmptyLayoutCell) const;
     };
 
     struct Ordering {
@@ -269,13 +296,6 @@ namespace RUL0 {
 
     // RotateEdgeFlags: Rotate edge constraint flags (bitwise rotation)
     uint32_t RotateEdgeFlags(uint32_t flags, int rotation);
-
-    // RotateConstraint: Map constraint bytes to rotated equivalents
-    uint8_t RotateConstraint(uint8_t constraint);
-
-    // RotateMap: Rotate a byte map (grid) in place, optionally applying constraint rotation
-    void RotateMap(std::vector<uint8_t>& mapData, int& width, int& height, int& centerX, int& centerY,
-                   int rotation, bool rotateConstraints);
 
     // Piece transformation functions
     void CopyPuzzlePiece(const PuzzlePiece& source, PuzzlePiece& dest);

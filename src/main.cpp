@@ -113,7 +113,8 @@ namespace {
 
 auto main() -> int {
     RUL0::Record data;
-    if (ini_parse("../examples/rul0/4023_FARR-2-3_Crossings.txt", RUL0::IniHandler, &data) < 0) {
+    auto res = ini_parse("../examples/rul0/rul0_full.txt", RUL0::IniHandler, &data);
+    if (res < 0) {
         std::println("An error occurred during parsing");
     }
 
@@ -131,9 +132,10 @@ auto main() -> int {
         }
     }
     std::println("{}", count);
+    return 0;
 
     DBPF::Reader reader;
-    if (!reader.LoadFile("../examples/dat/051-non-pac_000.dat")) {
+    if (!reader.LoadFile("../examples/dat/800-nam_001.dat")) {
         std::println("Failed to load DAT");
         return 1;
     }
@@ -187,8 +189,9 @@ auto main() -> int {
         const auto res = reader.LoadS3D(*entry);
         if (!res.has_value()) {
             std::println("Failed to load S3D {}: {}", entry->tgi.ToString(), res.error().message);
+        } else {
+            //std::println("Loaded S3D {} with {} vertices", entry->tgi.ToString(), res->vertexBuffers.size());
         }
-        std::println("Loaded S3D {} with {} vertices", entry->tgi.ToString(), res->vertexBuffers.size());
     }
 
     return 0;

@@ -649,6 +649,77 @@ TEST_CASE("RUL0 parser loads minimal ordering data") {
     CHECK(piece.effect.initialized);
 }
 
+TEST_CASE("RUL0 parser applies CopyFrom/Rotate/Transpose/Translate to layouts and metadata") {
+    const std::string text =
+        "RotationRing=0x1000,0x1100,0x1200,0x1300\n"
+        "\n"
+        "[HighwayIntersectionInfo_0x00001000]\n"
+        "Piece=0.0, 0.0, 0, 0, 0x00000001\n"
+        "CellLayout=a.\n"
+        "CellLayout=^<\n"
+        "ConsLayout=x.\n"
+        "ConsLayout=.|\n"
+        "CheckType=a - road: 0x00000000\n"
+        "\n"
+        "[HighwayIntersectionInfo_0x00001100]\n"
+        "CopyFrom=0x1000\n"
+        "Rotate=1\n"
+        "\n"
+        "[HighwayIntersectionInfo_0x00001200]\n"
+        "CopyFrom=0x1000\n"
+        "Transpose=1\n"
+        "\n"
+        "[HighwayIntersectionInfo_0x00001300]\n"
+        "CopyFrom=0x1000\n"
+        "Translate=1,1\n";
+
+    std::span<const uint8_t> span(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+    auto parsed = RUL0::Parse(span);
+    REQUIRE(parsed.has_value());
+    auto data = std::move(parsed).value();
+
+    auto expectGrid = [](const std::vector<std::string>& actual,
+                         const std::vector<std::string>& expected) {
+        REQUIRE(actual.size() == expected.size());
+        for (size_t row = 0; row < expected.size(); ++row) {
+            CHECK(actual[row] == expected[row]);
+        }
+    };
+
+    const auto base = data.puzzlePieces.at(0x1000);
+    expectGrid(base.NormalizedCellLayout(), {"a.", "^<"});
+    expectGrid(base.NormalizedConsLayout(), {"x.", ".|"});
+    auto sample = base.SampleLayout(0, 0);
+    CHECK(sample.hasCell);
+    CHECK(sample.cell == 'a');
+    REQUIRE(sample.checkType != nullptr);
+    CHECK(sample.checkType->symbol == 'a');
+    CHECK(sample.hasCons);
+    CHECK(sample.cons == 'x');
+    CHECK(base.requestedTransform.copyFrom == 0);
+    CHECK(base.appliedTransform.copyFrom == 0);
+    CHECK(base.requestedTransform.rotate == RUL0::Rotation::NONE);
+
+    const auto rotated = data.puzzlePieces.at(0x1100);
+    expectGrid(rotated.NormalizedCellLayout(), {"^a", "<."});
+    expectGrid(rotated.NormalizedConsLayout(), {".x", "|."});
+    CHECK(rotated.appliedTransform.rotate == RUL0::Rotation::ROT_90);
+    CHECK(rotated.requestedTransform.rotate == RUL0::Rotation::ROT_90);
+
+    const auto transposed = data.puzzlePieces.at(0x1200);
+    expectGrid(transposed.NormalizedCellLayout(), {"a^", ".<"});
+    expectGrid(transposed.NormalizedConsLayout(), {"x.", ".|"});
+    CHECK(transposed.appliedTransform.transpose);
+    CHECK(transposed.requestedTransform.transpose);
+
+    const auto translated = data.puzzlePieces.at(0x1300);
+    expectGrid(translated.NormalizedCellLayout(), {"...", ".a.", ".^<"});
+    expectGrid(translated.NormalizedConsLayout(), {"...", ".x.", "..|"});
+    CHECK(translated.appliedTransform.translate.initialized);
+    CHECK(translated.appliedTransform.translate.x == 1);
+    CHECK(translated.appliedTransform.translate.z == 1);
+}
+
 TEST_CASE("FSH reader parses simple uncompressed bitmap") {
     auto buffer = BuildSimpleFsh();
     std::span<const uint8_t> bufferSpan(buffer.data(), buffer.size());

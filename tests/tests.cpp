@@ -701,13 +701,13 @@ TEST_CASE("RUL0 parser applies CopyFrom/Rotate/Transpose/Translate to layouts an
     CHECK(base.requestedTransform.rotate == RUL0::Rotation::NONE);
 
     const auto rotated = data.puzzlePieces.at(0x1100);
-    expectGrid(rotated.NormalizedCellLayout(), {"^a", "<."});
+    expectGrid(rotated.NormalizedCellLayout(), {"a<", "^."});
     expectGrid(rotated.NormalizedConsLayout(), {".x", "|."});
     CHECK(rotated.appliedTransform.rotate == RUL0::Rotation::ROT_90);
     CHECK(rotated.requestedTransform.rotate == RUL0::Rotation::ROT_90);
 
     const auto transposed = data.puzzlePieces.at(0x1200);
-    expectGrid(transposed.NormalizedCellLayout(), {"a^", ".<"});
+    expectGrid(transposed.NormalizedCellLayout(), {"a<", "^."});
     expectGrid(transposed.NormalizedConsLayout(), {"x.", ".|"});
     CHECK(transposed.appliedTransform.transpose);
     CHECK(transposed.requestedTransform.transpose);

@@ -158,6 +158,107 @@ namespace RUL0 {
             return translated;
         }
 
+        // Keep '<' (center row) on the right edge and '^' (center column) on the bottom edge
+        void NormalizeCenterMarkers(Grid& grid, const char fillChar = kEmptyLayoutCell) {
+            if (grid.empty()) {
+                return;
+            }
+
+            grid = NormalizeGrid(grid, fillChar);
+            const size_t originalWidth = grid.front().size();
+            size_t height = grid.size();
+            size_t width = grid.front().size();
+
+            auto hasCenterRow = false;
+            size_t centerRow = 0;
+            auto hasCenterCol = false;
+            size_t centerCol = 0;
+
+            for (size_t y = 0; y < height; ++y) {
+                for (size_t x = 0; x < width; ++x) {
+                    const char cell = grid[y][x];
+                    if (cell == '<') {
+                        hasCenterRow = true;
+                        centerRow = y;
+                        grid[y][x] = fillChar;
+                    }
+                    else if (cell == '^') {
+                        hasCenterCol = true;
+                        centerCol = x;
+                        grid[y][x] = fillChar;
+                    }
+                }
+            }
+
+            if (!hasCenterRow && !hasCenterCol) {
+                return;
+            }
+
+            const auto isRowEmpty = [&](const size_t rowIndex) -> bool {
+                return std::ranges::all_of(grid[rowIndex], [&](const char c) {
+                    return c == fillChar;
+                });
+            };
+
+            const auto isColEmpty = [&](size_t colIndex) -> bool {
+                return std::ranges::all_of(grid, [&](const auto& row) {
+                    return colIndex < row.size() && row[colIndex] == fillChar;
+                });
+            };
+
+            if (hasCenterRow && centerRow < grid.size() && isRowEmpty(centerRow)) {
+                grid.erase(grid.begin() + centerRow);
+            }
+
+            if (grid.empty()) {
+                grid.emplace_back(std::max<size_t>(1, originalWidth), fillChar);
+            }
+
+            if (hasCenterCol && centerCol < grid.front().size() && isColEmpty(centerCol)) {
+                for (auto& row : grid) {
+                    if (row.empty()) {
+                        row.assign(std::max<size_t>(1, originalWidth), fillChar);
+                    }
+                    if (centerCol < row.size()) {
+                        row.erase(row.begin() + centerCol);
+                    }
+                }
+            }
+
+            if (grid.empty()) {
+                grid.emplace_back(std::max<size_t>(1, originalWidth), fillChar);
+            }
+
+            if (!grid.empty() && grid.front().empty()) {
+                for (auto& row : grid) {
+                    row.assign(std::max<size_t>(1, originalWidth), fillChar);
+                }
+            }
+
+            height = grid.size();
+            width = grid.front().size();
+
+            const size_t placementRow = std::min(centerRow, height - 1);
+            const size_t placementCol = std::min(centerCol, width - 1);
+
+            for (auto& row : grid) {
+                row.push_back(fillChar);
+            }
+            ++width;
+
+            grid.push_back(std::string(width, fillChar));
+            const size_t bottomRow = grid.size() - 1;
+            const size_t rightmostCol = width - 1;
+
+            if (hasCenterRow) {
+                grid[placementRow][rightmostCol] = '<';
+            }
+
+            if (hasCenterCol) {
+                grid[bottomRow][placementCol] = '^';
+            }
+        }
+
         uint32_t TransposeEdgeFlags(const uint32_t flags) {
             const uint32_t south = (flags >> 24) & 0xFF;
             const uint32_t east = (flags >> 16) & 0xFF;
@@ -701,9 +802,11 @@ namespace RUL0 {
         // Rotate layouts
         if (!piece.cellLayout.empty()) {
             piece.cellLayout = RotateGrid(piece.cellLayout, times);
+            NormalizeCenterMarkers(piece.cellLayout);
         }
         if (!piece.consLayout.empty()) {
             piece.consLayout = RotateGrid(piece.consLayout, times);
+            NormalizeCenterMarkers(piece.consLayout);
         }
 
         // Rotate preview effect position and rotation
@@ -747,10 +850,12 @@ namespace RUL0 {
 
         if (!piece.cellLayout.empty()) {
             piece.cellLayout = TransposeGrid(piece.cellLayout);
+            NormalizeCenterMarkers(piece.cellLayout);
         }
 
         if (!piece.consLayout.empty()) {
             piece.consLayout = TransposeGrid(piece.consLayout);
+            NormalizeCenterMarkers(piece.consLayout);
         }
 
         // Update effect flip state

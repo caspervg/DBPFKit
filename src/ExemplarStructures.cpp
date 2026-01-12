@@ -4,13 +4,24 @@
 
 namespace Exemplar {
 
-    const Property* Record::FindProperty(uint32_t id) const {
+    const Property* Record::FindProperty(const uint32_t id) const {
         for (const auto& prop : properties) {
             if (prop.id == id) {
                 return &prop;
             }
         }
         return nullptr;
+    }
+
+    bool Record::FindProperties(const uint32_t id, std::vector<Property>& result) const {
+        auto found = false;
+        for (const auto& prop : properties) {
+            if (prop.id == id) {
+                result.push_back(prop);
+                found = true;
+            }
+        }
+        return found;
     }
 
     std::string Property::ToString() const {

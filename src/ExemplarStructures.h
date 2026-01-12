@@ -41,8 +41,9 @@ namespace Exemplar {
         std::vector<Property> properties;
 
         [[nodiscard]] const Property* FindProperty(uint32_t id) const;
+        [[nodiscard]] bool FindProperties(uint32_t id, std::vector<Property>& result) const;
 
-        template<typename T>
+        template <typename T>
         std::optional<T> GetScalar(uint32_t id) const {
             const Property* prop = FindProperty(id);
             if (!prop || prop->values.empty() || prop->isList) {

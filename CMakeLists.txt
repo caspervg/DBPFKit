@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
+
+# Enable CMP0091 for proper MSVC runtime library handling
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
 project(DBPFKit)
 
 set(CMAKE_CXX_STANDARD 23)

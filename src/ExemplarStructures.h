@@ -32,6 +32,49 @@ namespace Exemplar {
         [[nodiscard]] bool IsString() const { return type == ValueType::String; }
         [[nodiscard]] bool IsNumericList() const { return isList && type != ValueType::String; }
         [[nodiscard]] std::string ToString() const;
+
+        // Get a value with automatic type conversion for numeric types
+        // Supports conversion between all integer types (uint8, uint16, uint32, int32, int64)
+        // Returns nullopt if index is out of bounds or type conversion is not supported
+        template <typename T>
+        [[nodiscard]] std::optional<T> GetScalarAs(size_t index = 0) const {
+            if (index >= values.size()) {
+                return std::nullopt;
+            }
+
+            return std::visit([]<typename U>(U&& val) -> std::optional<T> {
+                using V = std::decay_t<U>;
+
+                // Handle string type
+                if constexpr (std::is_same_v<V, std::string>) {
+                    if constexpr (std::is_same_v<T, std::string>) {
+                        return val;
+                    }
+                    return std::nullopt;
+                }
+                // Handle bool type
+                else if constexpr (std::is_same_v<V, bool>) {
+                    if constexpr (std::is_same_v<T, bool>) {
+                        return val;
+                    }
+                    return std::nullopt;
+                }
+                // Handle float type
+                else if constexpr (std::is_same_v<V, float>) {
+                    if constexpr (std::is_same_v<T, float>) {
+                        return val;
+                    }
+                    return std::nullopt;
+                }
+                // Handle numeric conversions (all integer types)
+                else if constexpr (std::is_integral_v<V> && std::is_integral_v<T>) {
+                    return static_cast<T>(val);
+                }
+                else {
+                    return std::nullopt;
+                }
+            }, values[index]);
+        }
     };
 
     struct Record {

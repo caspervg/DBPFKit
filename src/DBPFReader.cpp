@@ -432,16 +432,20 @@ namespace DBPF {
     }
 
     bool Reader::ParseIndex(std::span<const uint8_t> buffer) {
+        // Check offset and size separately so untrusted header values cannot
+        // wrap the addition on 32-bit size_t.
         const size_t indexOffset = mHeader.indexOffsetLocation;
-        if (indexOffset + mHeader.indexSize > buffer.size()) {
+        const size_t indexSize = mHeader.indexSize;
+        if (indexOffset > buffer.size() || indexSize > buffer.size() - indexOffset) {
             return false;
         }
 
-        return ParseIndexSpan(buffer.subspan(indexOffset, mHeader.indexSize));
+        return ParseIndexSpan(buffer.subspan(indexOffset, indexSize));
     }
 
     bool Reader::ParseIndexSpan(std::span<const uint8_t> buffer) {
-        if (buffer.size() < mHeader.indexEntryCount * 20) {
+        // Divide instead of multiplying so a huge entry count cannot overflow.
+        if (mHeader.indexEntryCount > buffer.size() / 20) {
             return false;
         }
 
@@ -550,7 +554,9 @@ namespace DBPF {
 
         switch (mDataSource) {
         case DataSource::kBuffer: {
-            if (mFileBuffer.empty() || start > mFileBuffer.size() || start + length > mFileBuffer.size()) {
+            // Check offset and length separately so untrusted index entries cannot
+            // wrap the addition on 32-bit size_t.
+            if (mFileBuffer.empty() || start > mFileBuffer.size() || length > mFileBuffer.size() - start) {
                 return false;
             }
             out.span = std::span(mFileBuffer.data() + start, length);

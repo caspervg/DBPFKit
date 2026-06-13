@@ -1,5 +1,6 @@
 #include "LTextReader.h"
 
+#include <algorithm>
 #include <cstring>
 #include <string_view>
 
@@ -84,6 +85,13 @@ namespace {
         return out;
     }
 
+    // Exemplar/cohort records mis-typed as LTEXT start with one of these magics
+    // (E/C = exemplar/cohort, QZ, B/T = binary/text encoding).
+    bool LooksLikeRecordHeader(std::string_view raw) {
+        return raw.starts_with("EQZB") || raw.starts_with("EQZT") ||
+               raw.starts_with("CQZB") || raw.starts_with("CQZT");
+    }
+
     ParseExpected<LText::Record> ParseFallback(std::span<const uint8_t> buffer) {
         std::string_view raw(reinterpret_cast<const char*>(buffer.data()), buffer.size());
         const auto nul = raw.find('\0');
@@ -92,6 +100,16 @@ namespace {
         }
         if (raw.empty()) {
             return Fail("LText fallback payload is empty");
+        }
+        if (LooksLikeRecordHeader(raw)) {
+            return Fail("LText payload is actually an exemplar/cohort record ({}...)", raw.substr(0, 8));
+        }
+        const bool hasBinaryControls = std::any_of(raw.begin(), raw.end(), [](const char c) {
+            const auto byte = static_cast<unsigned char>(c);
+            return byte < 0x20 && c != '\t' && c != '\r' && c != '\n';
+        });
+        if (hasBinaryControls) {
+            return Fail("LText fallback payload contains control bytes; treating as binary, not text");
         }
         LText::Record record;
         record.text = DecodeUtf8Lossy(raw);

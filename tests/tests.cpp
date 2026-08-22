@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <span>
 #include <string>
@@ -331,6 +334,35 @@ TEST_CASE("DBPF reader parses uncompressed entries") {
     REQUIRE(data.has_value());
     REQUIRE(*data == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
 }
+
+#ifdef _WIN32
+TEST_CASE("DBPF reader opens paths longer than MAX_PATH") {
+    auto directory = std::filesystem::temp_directory_path() /
+        (L"dbpf-long-path-" + std::to_wstring(std::chrono::steady_clock::now().time_since_epoch().count()));
+    while (directory.native().size() < 270) {
+        directory /= L"123456789012345678901234567890";
+    }
+    const auto extendedDirectory = std::filesystem::path(LR"(\\?\)" + directory.native());
+    REQUIRE(std::filesystem::create_directories(extendedDirectory));
+
+    const DBPF::Tgi tgi{1, 2, 3};
+    const auto buffer = BuildDbpf({TestEntry{tgi, {'T', 'E', 'S', 'T'}}});
+    const auto filePath = directory / L"test.dat";
+    {
+        std::ofstream file(std::filesystem::path(LR"(\\?\)" + filePath.native()), std::ios::binary);
+        file.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        REQUIRE(file.good());
+    }
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadFile(filePath));
+    const auto data = reader.ReadEntryData(tgi);
+    REQUIRE(data == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+
+    std::error_code ec;
+    std::filesystem::remove_all(extendedDirectory, ec);
+}
+#endif
 
 TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {
     const DBPF::Tgi tgi{0x11111111, 0x22222222, 0x33333333};

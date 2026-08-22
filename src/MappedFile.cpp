@@ -7,6 +7,18 @@
 
 namespace io {
 
+#ifdef _WIN32
+    static std::filesystem::path ExtendedPath(const std::filesystem::path& path) {
+        const auto& native = path.native();
+        if (!path.is_absolute() || native.starts_with(LR"(\\?\)") || native.starts_with(LR"(\\.\)")) {
+            return path;
+        }
+        return native.starts_with(LR"(\\)")
+            ? std::filesystem::path(LR"(\\?\UNC\)" + native.substr(2))
+            : std::filesystem::path(LR"(\\?\)" + native);
+    }
+#endif
+
     void MappedFile::Range::Reset() {
         if (mMap.is_mapped()) {
             mMap.unmap();
@@ -18,14 +30,19 @@ namespace io {
     bool MappedFile::Open(const std::filesystem::path& path) {
         Close();
 
+#ifdef _WIN32
+        mPath = ExtendedPath(path);
+#else
+        mPath = path;
+#endif
         std::error_code ec;
-        const auto size = std::filesystem::file_size(path, ec);
+        const auto size = std::filesystem::file_size(mPath, ec);
         if (ec) {
             std::println("[MappedFile] Failed to stat {}: {}", path.string(), ec.message());
+            mPath.clear();
             return false;
         }
 
-        mPath = path;
         mFileSize = static_cast<uint64_t>(size);
         mIsOpen = true;
         return true;

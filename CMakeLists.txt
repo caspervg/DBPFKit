@@ -51,6 +51,9 @@ add_subdirectory(vendor/catch2)
 add_library(DBPFKitLib STATIC
     vendor/inih/ini.c
     src/RUL0.cpp
+    src/RUL1.cpp
+    src/RUL2.cpp
+    src/NetworkRUL.cpp
     src/FSHReader.cpp
     src/QFSDecompressor.cpp
     src/ExemplarReader.cpp
@@ -83,6 +86,7 @@ endif()
 add_executable(DBPFKitTests
     tests/tests.cpp
     tests/parse_helpers_tests.cpp
+    tests/rul_tests.cpp
 )
 target_link_libraries(DBPFKitTests PRIVATE
     DBPFKitLib

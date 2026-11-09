@@ -11,6 +11,7 @@ namespace io {
 
     class MappedFile {
     public:
+        // A view of the file. It stays valid until the MappedFile is closed or destroyed.
         class Range {
         public:
             Range() = default;
@@ -27,7 +28,6 @@ namespace io {
             friend class MappedFile;
             void Reset();
 
-            mio::mmap_source mMap;
             std::vector<uint8_t> mFallback;
             std::span<const uint8_t> mSpan{};
         };
@@ -52,6 +52,7 @@ namespace io {
         bool ReadFallback(uint64_t offset, size_t length, Range& outRange) const;
 
         std::filesystem::path mPath;
+        mio::mmap_source mMap;
         uint64_t mFileSize = 0;
         bool mIsOpen = false;
     };

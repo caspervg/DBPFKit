@@ -335,6 +335,30 @@ TEST_CASE("DBPF reader parses uncompressed entries") {
     REQUIRE(*data == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
 }
 
+TEST_CASE("DBPF reader reads each mapped entry at its own offset") {
+    const auto filePath = std::filesystem::temp_directory_path() /
+        ("dbpf-mapped-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".dat");
+
+    const DBPF::Tgi first{1, 2, 3};
+    const DBPF::Tgi second{4, 5, 6};
+    const auto buffer = BuildDbpf({TestEntry{first, {'A', 'B'}}, TestEntry{second, {'C', 'D', 'E'}}});
+    {
+        std::ofstream file(filePath, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        REQUIRE(file.good());
+    }
+
+    {
+        DBPF::Reader reader;
+        REQUIRE(reader.LoadFile(filePath));
+        REQUIRE(reader.ReadEntryData(second) == std::vector<uint8_t>{'C', 'D', 'E'});
+        REQUIRE(reader.ReadEntryData(first) == std::vector<uint8_t>{'A', 'B'});
+    }
+
+    std::error_code ec;
+    std::filesystem::remove(filePath, ec);
+}
+
 #ifdef _WIN32
 TEST_CASE("DBPF reader opens paths longer than MAX_PATH") {
     auto directory = std::filesystem::temp_directory_path() /

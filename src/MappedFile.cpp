@@ -5,6 +5,11 @@
 #include <print>
 #include <system_error>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace io {
 
 #ifdef _WIN32
@@ -20,9 +25,6 @@ namespace io {
 #endif
 
     void MappedFile::Range::Reset() {
-        if (mMap.is_mapped()) {
-            mMap.unmap();
-        }
         mFallback.clear();
         mSpan = {};
     }
@@ -45,10 +47,28 @@ namespace io {
 
         mFileSize = static_cast<uint64_t>(size);
         mIsOpen = true;
+
+        // Map the whole file once: mapping per entry reopens the file every time, which dominates scans.
+        // When this fails the file stays open unmapped and MapRange reads through ReadFallback.
+        std::error_code mapError;
+#ifdef _WIN32
+        mMap.map(mPath.native(), mapError);
+#else
+        // mio holds on to a descriptor it opens itself. Plugin folders can exceed the descriptor limit,
+        // and a mapping outlives its descriptor, so open and close it here.
+        if (const int descriptor = ::open(mPath.c_str(), O_RDONLY); descriptor != -1) {
+            mMap.map(descriptor, mapError);
+            ::close(descriptor);
+        }
+#endif
+        if (mMap.is_mapped()) {
+            mFileSize = static_cast<uint64_t>(mMap.size());
+        }
         return true;
     }
 
     void MappedFile::Close() {
+        mMap.unmap();
         mIsOpen = false;
         mFileSize = 0;
         mPath.clear();
@@ -71,20 +91,11 @@ namespace io {
             return true;
         }
 
-        std::error_code ec;
-        outRange.mMap.map(mPath.native(),
-                          static_cast<size_t>(offset),
-                          static_cast<size_t>(clampedLength),
-                          ec);
-        if (!ec && outRange.mMap.is_mapped()) {
+        if (mMap.is_mapped()) {
             outRange.mSpan = std::span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(outRange.mMap.data()),
-                outRange.mMap.length());
+                reinterpret_cast<const uint8_t*>(mMap.data()) + static_cast<size_t>(offset),
+                static_cast<size_t>(clampedLength));
             return true;
-        }
-
-        if (outRange.mMap.is_mapped()) {
-            outRange.mMap.unmap();
         }
 
         const bool fallbackResult = ReadFallback(offset, static_cast<size_t>(clampedLength), outRange);

@@ -96,3 +96,22 @@ TEST_CASE("Case-insensitive helpers")
     CHECK(StartsWithIgnoreCase("ReplacementIntersection", "replacement"));
     CHECK_FALSE(StartsWithIgnoreCase("Ordering", "Orderx"));
 }
+
+TEST_CASE("ParseCheckType gives optional and check to every network of the line") {
+    const auto optional = RUL0::ParseCheckType("b - street: 0x02020202 onewayroad: 0x04040404, 0xffffffff optional");
+    REQUIRE(optional.networks.size() == 2);
+    CHECK(optional.networks[0].optional);
+    CHECK(optional.networks[1].optional);
+    CHECK_FALSE(optional.networks[0].check);
+
+    const auto check = RUL0::ParseCheckType("e - highway:0x02040000,0xffff00ff check avenue: 0x04020002");
+    REQUIRE(check.networks.size() == 2);
+    CHECK(check.networks[0].check);
+    CHECK(check.networks[1].check);
+    CHECK_FALSE(check.networks[1].optional);
+
+    const auto plain = RUL0::ParseCheckType("A - highway: 0x02040200 avenue: 0x04020002");
+    REQUIRE(plain.networks.size() == 2);
+    CHECK_FALSE(plain.networks[0].optional);
+    CHECK_FALSE(plain.networks[0].check);
+}

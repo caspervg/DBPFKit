@@ -155,6 +155,7 @@ namespace RUL0 {
         NetworkType networkType = NetworkType::NONE;
         uint32_t ruleFlagByte = 0xFFFFFFFF;
         uint32_t hexMask = 0xFFFFFFFF;
+        // These two belong to the whole CheckType line, so every network of a line has the same values.
         bool optional = false;
         bool check = false;
     };

@@ -548,6 +548,11 @@ namespace RUL0 {
             return false;
         };
 
+        // "optional" and "check" are flags of the whole line: the game keeps one of each per CheckType, not
+        // per network, wherever they appear on the line.
+        bool optional = false;
+        bool check = false;
+
         // Parse loop
         while (!rest.empty()) {
             auto token = nextToken();
@@ -555,12 +560,10 @@ namespace RUL0 {
                 break;
 
             if (token == "optional") {
-                if (!ct.networks.empty())
-                    ct.networks.back().optional = true;
+                optional = true;
             }
             else if (token == "check") {
-                if (!ct.networks.empty())
-                    ct.networks.back().check = true;
+                check = true;
             }
             else if (expectChar(':')) {
                 // It's a network definition
@@ -579,6 +582,10 @@ namespace RUL0 {
             }
         }
 
+        for (auto& network : ct.networks) {
+            network.optional = optional;
+            network.check = check;
+        }
         return ct;
     }
 

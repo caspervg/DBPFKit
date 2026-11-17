@@ -429,7 +429,8 @@ namespace DBPF {
         mHeader.holeOffsetLocation = ReadUInt32LE(buffer.data() + 52);
         mHeader.holeSize = ReadUInt32LE(buffer.data() + 56);
 
-        if (mHeader.majorVersion != 1 || mHeader.minorVersion != 0) {
+        // Some faulty files say version 0.0; read them as 1.0, like scdbpf does.
+        if ((mHeader.majorVersion != 1 && mHeader.majorVersion != 0) || mHeader.minorVersion != 0) {
             return false;
         }
         if (mHeader.indexType != kSupportedIndexType) {

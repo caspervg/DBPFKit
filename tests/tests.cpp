@@ -504,6 +504,21 @@ TEST_CASE("DBPF reader applies directory metadata when present") {
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
+TEST_CASE("DBPF reader reads version 0.0 headers as 1.0") {
+    const DBPF::Tgi tgi{1, 2, 3};
+    auto buffer = BuildDbpf({TestEntry{tgi, {'T', 'E', 'S', 'T'}}});
+    WriteUInt32LE(buffer, 4, 0); // major version
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+
+    WriteUInt32LE(buffer, 4, 1);
+    WriteUInt32LE(buffer, 8, 1); // version 1.1 is still not supported
+    DBPF::Reader unsupported;
+    REQUIRE_FALSE(unsupported.LoadBuffer(buffer.data(), buffer.size()));
+}
+
 TEST_CASE("DBPF reader keeps files whose directory record is out of bounds") {
     const DBPF::Tgi dataTgi{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC};
     const TestEntry dataEntry{dataTgi, {'T', 'E', 'S', 'T'}};

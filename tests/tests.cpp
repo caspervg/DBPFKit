@@ -40,19 +40,13 @@ void WriteUInt32LE(std::vector<uint8_t>& buffer, size_t offset, uint32_t value) 
     buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFF);
 }
 
-std::vector<uint8_t> WrapChunked(const std::vector<uint8_t>& data, uint8_t flag) {
-    std::vector<uint8_t> chunk;
-    chunk.resize(flag == 0x10 ? 11 : 15);
-    WriteUInt32LE(chunk, 0, static_cast<uint32_t>(data.size()));
-    WriteUInt32LE(chunk, 4, static_cast<uint32_t>(data.size()));
-    chunk[8] = 0;
-    chunk[9] = 0;
-    chunk[10] = flag;
-    if (flag == 0x11) {
-        WriteUInt32LE(chunk, 11, static_cast<uint32_t>(data.size()));
-    }
-    chunk.insert(chunk.end(), data.begin(), data.end());
-    return chunk;
+// A compressed entry as SC4 writes it: the 4-byte compressed size, then the QFS stream.
+std::vector<uint8_t> Sc4CompressedEntry() {
+    const auto qfs = SampleQfsPayload();
+    std::vector<uint8_t> entry(4, 0);
+    WriteUInt32LE(entry, 0, static_cast<uint32_t>(qfs.size() + 4));
+    entry.insert(entry.end(), qfs.begin(), qfs.end());
+    return entry;
 }
 
 struct TestEntry {
@@ -416,10 +410,7 @@ TEST_CASE("DBPF reader opens paths written with forward slashes and dot-dot part
 
 TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {
     const DBPF::Tgi tgi{0x11111111, 0x22222222, 0x33333333};
-    const std::vector<TestEntry> entries{
-        TestEntry{tgi, SampleQfsPayload()},
-    };
-    auto buffer = BuildDbpf(entries);
+    auto buffer = BuildDbpf({TestEntry{tgi, Sc4CompressedEntry()}});
 
     DBPF::Reader reader;
     REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
@@ -431,17 +422,15 @@ TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
-TEST_CASE("DBPF reader decompresses QFS entries after the compressed size") {
+TEST_CASE("DBPF reader reads entries that start with the QFS signature as they are") {
+    // SC4 always writes the compressed size first, so a stream at the very start is not compressed data.
     const DBPF::Tgi tgi{0x11111111, 0x22222222, 0x33333333};
-    const auto qfs = SampleQfsPayload();
-    std::vector<uint8_t> payload(4, 0);
-    WriteUInt32LE(payload, 0, static_cast<uint32_t>(qfs.size() + 4));
-    payload.insert(payload.end(), qfs.begin(), qfs.end());
-    auto buffer = BuildDbpf({TestEntry{tgi, payload}});
+    const auto bare = SampleQfsPayload();
+    auto buffer = BuildDbpf({TestEntry{tgi, bare}});
 
     DBPF::Reader reader;
     REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
-    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'S', 'C', '4', '!'});
+    REQUIRE(reader.ReadEntryData(tgi) == bare);
 }
 
 TEST_CASE("DBPF reader leaves uncompressed entries that contain the QFS signature alone") {
@@ -465,24 +454,9 @@ TEST_CASE("DBPF reader leaves S3D models whose header reads as the QFS signature
     REQUIRE(reader.ReadEntryData(tgi) == s3d);
 }
 
-TEST_CASE("DBPF reader strips chunk header before QFS decompression") {
-    const DBPF::Tgi tgi{0x99999999, 0x88888888, 0x77777777};
-    const auto chunked = WrapChunked(SampleQfsPayload(), 0x10);
-    auto buffer = BuildDbpf({TestEntry{tgi, chunked}});
-
-    DBPF::Reader reader;
-    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
-
-    const auto& index = reader.GetIndex();
-    REQUIRE(index.size() == 1);
-    auto data = reader.ReadEntryData(index[0]);
-    REQUIRE(data.has_value());
-    REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
-}
-
 TEST_CASE("DBPF reader applies directory metadata when present") {
     const DBPF::Tgi dataTgi{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC};
-    const TestEntry dataEntry{dataTgi, SampleQfsPayload()};
+    const TestEntry dataEntry{dataTgi, Sc4CompressedEntry()};
     const TestEntry dirEntry{DBPF::kDirectoryTgi, BuildDirectoryPayload(dataTgi, 4)};
     auto buffer = BuildDbpf({dataEntry, dirEntry});
 

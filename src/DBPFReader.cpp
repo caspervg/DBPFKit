@@ -65,58 +65,11 @@ namespace DBPF {
         return true;
     }
 
-    bool IsChunkHeader(const uint8_t* data, size_t size,
-                       uint32_t& chunkHeaderSize, uint32_t& chunkBodySize) {
-        if (size < 9) {
-            return false;
-        }
-        const uint32_t chunkSize = ReadUInt32LE(data);
-        const uint32_t uncompressed = ReadUInt32LE(data + 4);
-        size_t flagOffset = 8;
-        uint8_t code = data[flagOffset];
-        if ((code != 0x10 && code != 0x11) && size >= 11) {
-            flagOffset = 10;
-            code = data[flagOffset];
-        }
-
-        if (code == 0x10 && chunkSize > 0 && flagOffset + 1 + chunkSize <= size) {
-            chunkHeaderSize = flagOffset + 1;
-            chunkBodySize = chunkSize;
-            return true;
-        }
-        if (code == 0x11 && size >= flagOffset + 5) {
-            chunkHeaderSize = flagOffset + 5;
-            uint32_t body = ReadUInt32LE(data + flagOffset + 1);
-            if (body == 0 || chunkHeaderSize + body > size) {
-                return false;
-            }
-            chunkBodySize = body;
-            return true;
-        }
-
-        (void)uncompressed;
-        return false;
-    }
-
-    // A QFS stream starts at the beginning of the entry, or after the 4-byte compressed size that SC4
-    // writes before it. Looking anywhere else would take uncompressed data that happens to contain the
-    // signature, such as an LText starting with U+00FB, for a stream and fail to decompress it.
-    bool AlignToQfsSignature(const uint8_t*& dataStart, size_t& dataSize) {
-        const auto isSignatureAt = [&](const size_t offset) {
-            return offset + 1 < dataSize &&
-                ((static_cast<uint16_t>(dataStart[offset]) << 8) | dataStart[offset + 1]) == QFS::MAGIC_COMPRESSED;
-        };
-        if (isSignatureAt(0)) {
-            return true;
-        }
-        // Like scdbpf: the 4-byte size and 5-byte QFS header must fit, and an S3D model whose header
-        // bytes happen to read as the signature (there is one in SimCity_1.dat) is not compressed.
-        if (dataSize >= 9 && isSignatureAt(4) && std::memcmp(dataStart, "3DMD", 4) != 0) {
-            dataStart += 4;
-            dataSize -= 4;
-            return true;
-        }
-        return false;
+    // Decides compression from the entry itself, like scdbpf: SC4 writes a 4-byte compressed size, then
+    // the QFS signature 10 FB and a 3-byte decompressed size. An S3D model in SimCity_1.dat has header
+    // bytes that read as the signature but is not compressed.
+    static bool IsCompressedEntry(const std::span<const uint8_t> data) {
+        return data.size() >= 9 && data[4] == 0x10 && data[5] == 0xFB && std::memcmp(data.data(), "3DMD", 4) != 0;
     }
 
     std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const IndexEntry& entry) const {
@@ -127,31 +80,16 @@ namespace DBPF {
             return std::nullopt;
         }
 
-        const uint8_t* dataStart = entryData.span.data();
-        size_t dataSize = entryData.span.size();
-
-        uint32_t chunkHeaderSize = 0;
-        uint32_t chunkBodySize = 0;
-        if (IsChunkHeader(dataStart, dataSize, chunkHeaderSize, chunkBodySize)) {
-            dataStart += chunkHeaderSize;
-            dataSize = chunkBodySize;
+        const auto data = entryData.span;
+        if (!IsCompressedEntry(data)) {
+            return std::vector<uint8_t>(data.begin(), data.end());
         }
 
-        bool _ = AlignToQfsSignature(dataStart, dataSize);
-
-        std::vector data(dataStart, dataStart + dataSize);
-
-        std::span<const uint8_t> dataSpan(data.data(), data.size());
-
-        if (QFS::Decompressor::IsQFSCompressed(dataSpan)) {
-            std::vector<uint8_t> decompressed;
-            auto result = QFS::Decompressor::Decompress(dataSpan, decompressed);
-            if (!result.has_value()) {
-                return std::nullopt;
-            }
-            return decompressed;
+        std::vector<uint8_t> decompressed;
+        if (!QFS::Decompressor::Decompress(data.subspan(4), decompressed).has_value()) {
+            return std::nullopt;
         }
-        return data;
+        return decompressed;
     }
 
     std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const Tgi& tgi) const {

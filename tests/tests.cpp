@@ -749,6 +749,23 @@ TEST_CASE("Exemplar parser decodes signed hex literals in text exemplars") {
     CHECK(std::get<int32_t>(prop->values[1]) == 10);
 }
 
+TEST_CASE("Exemplar parser wraps text exemplar integers that do not fit their type") {
+    const std::string text =
+        "EQZT1###\n"
+        "ParentCohort=Key:{0x00000000,0x00000000,0x00000000}\n"
+        "PropCount=0x00000004\n"
+        "0x00000010:{\"Exemplar Type\"}=Uint32:0:{0x0000001E}\n"
+        "0x00000001:{\"Byte\"}=Uint8:0:{256}\n"
+        "0x00000002:{\"Signed\"}=Sint32:0:{4294967295}\n"
+        "0x00000003:{\"Unsigned\"}=Uint32:0:{-1}\n";
+    std::vector<uint8_t> buffer(text.begin(), text.end());
+    auto parsed = Exemplar::Parse(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    REQUIRE(parsed.has_value());
+    CHECK(std::get<uint8_t>(parsed->FindProperty(0x00000001)->values[0]) == 0);
+    CHECK(std::get<int32_t>(parsed->FindProperty(0x00000002)->values[0]) == -1);
+    CHECK(std::get<uint32_t>(parsed->FindProperty(0x00000003)->values[0]) == 0xFFFFFFFF);
+}
+
 TEST_CASE("LText parser decodes UTF-16 payloads") {
     std::u16string text = u"City ";
     text.push_back(static_cast<char16_t>(0xD83D));

@@ -484,37 +484,26 @@ namespace {
     }
 
     ParseExpected<Exemplar::ValueVariant> ParseValueVariant(TextCursor& cursor, Exemplar::ValueType type) {
+        // Integers that do not fit their type wrap around instead of failing the exemplar, like scdbpf.
         switch (type) {
             case Exemplar::ValueType::UInt8: {
                 auto number = ParseIntegerLiteral(cursor);
                 if (!number.has_value()) return std::unexpected(number.error());
-                if (*number < 0 || *number > std::numeric_limits<uint8_t>::max()) {
-                    return Fail("UInt8 value out of range");
-                }
                 return static_cast<uint8_t>(*number);
             }
             case Exemplar::ValueType::UInt16: {
                 auto number = ParseIntegerLiteral(cursor);
                 if (!number.has_value()) return std::unexpected(number.error());
-                if (*number < 0 || *number > std::numeric_limits<uint16_t>::max()) {
-                    return Fail("UInt16 value out of range");
-                }
                 return static_cast<uint16_t>(*number);
             }
             case Exemplar::ValueType::UInt32: {
                 auto number = ParseIntegerLiteral(cursor);
                 if (!number.has_value()) return std::unexpected(number.error());
-                if (*number < 0 || *number > std::numeric_limits<uint32_t>::max()) {
-                    return Fail("UInt32 value out of range");
-                }
                 return static_cast<uint32_t>(*number);
             }
             case Exemplar::ValueType::SInt32: {
-                auto number = ParseIntegerLiteral(cursor, true, 32);
+                auto number = ParseIntegerLiteral(cursor);
                 if (!number.has_value()) return std::unexpected(number.error());
-                if (*number < std::numeric_limits<int32_t>::min() || *number > std::numeric_limits<int32_t>::max()) {
-                    return Fail("SInt32 value out of range");
-                }
                 return static_cast<int32_t>(*number);
             }
             case Exemplar::ValueType::SInt64: {

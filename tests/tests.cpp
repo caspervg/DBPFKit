@@ -386,6 +386,32 @@ TEST_CASE("DBPF reader opens paths longer than MAX_PATH") {
     std::error_code ec;
     std::filesystem::remove_all(extendedDirectory, ec);
 }
+
+TEST_CASE("DBPF reader opens paths written with forward slashes and dot-dot parts") {
+    const auto directory = std::filesystem::temp_directory_path() /
+        (L"dbpf-unnormal-path-" + std::to_wstring(std::chrono::steady_clock::now().time_since_epoch().count()));
+    REQUIRE(std::filesystem::create_directories(directory / L"sub"));
+
+    const DBPF::Tgi tgi{1, 2, 3};
+    const auto buffer = BuildDbpf({TestEntry{tgi, {'T', 'E', 'S', 'T'}}});
+    {
+        std::ofstream file(directory / L"test.dat", std::ios::binary);
+        file.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        REQUIRE(file.good());
+    }
+
+    // As a user might type it: forward slashes and a ".." part.
+    std::wstring unnormal = directory.native();
+    std::replace(unnormal.begin(), unnormal.end(), L'\\', L'/');
+    unnormal += L"/sub/../test.dat";
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadFile(std::filesystem::path(unnormal)));
+    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+
+    std::error_code ec;
+    std::filesystem::remove_all(directory, ec);
+}
 #endif
 
 TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {

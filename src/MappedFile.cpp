@@ -14,10 +14,13 @@ namespace io {
 
 #ifdef _WIN32
     static std::filesystem::path ExtendedPath(const std::filesystem::path& path) {
-        const auto& native = path.native();
-        if (!path.is_absolute() || native.starts_with(LR"(\\?\)") || native.starts_with(LR"(\\.\)")) {
+        if (!path.is_absolute() || path.native().starts_with(LR"(\\?\)") || path.native().starts_with(LR"(\\.\)")) {
             return path;
         }
+        // The \\?\ prefix turns off Windows path normalization: "/" and ".." would be taken literally.
+        auto normal = path.lexically_normal();
+        normal.make_preferred();
+        const auto& native = normal.native();
         return native.starts_with(LR"(\\)")
             ? std::filesystem::path(LR"(\\?\UNC\)" + native.substr(2))
             : std::filesystem::path(LR"(\\?\)" + native);

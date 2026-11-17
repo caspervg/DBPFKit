@@ -40,19 +40,13 @@ void WriteUInt32LE(std::vector<uint8_t>& buffer, size_t offset, uint32_t value) 
     buffer[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFF);
 }
 
-std::vector<uint8_t> WrapChunked(const std::vector<uint8_t>& data, uint8_t flag) {
-    std::vector<uint8_t> chunk;
-    chunk.resize(flag == 0x10 ? 11 : 15);
-    WriteUInt32LE(chunk, 0, static_cast<uint32_t>(data.size()));
-    WriteUInt32LE(chunk, 4, static_cast<uint32_t>(data.size()));
-    chunk[8] = 0;
-    chunk[9] = 0;
-    chunk[10] = flag;
-    if (flag == 0x11) {
-        WriteUInt32LE(chunk, 11, static_cast<uint32_t>(data.size()));
-    }
-    chunk.insert(chunk.end(), data.begin(), data.end());
-    return chunk;
+// A compressed entry as SC4 writes it: the 4-byte compressed size, then the QFS stream.
+std::vector<uint8_t> Sc4CompressedEntry() {
+    const auto qfs = SampleQfsPayload();
+    std::vector<uint8_t> entry(4, 0);
+    WriteUInt32LE(entry, 0, static_cast<uint32_t>(qfs.size() + 4));
+    entry.insert(entry.end(), qfs.begin(), qfs.end());
+    return entry;
 }
 
 struct TestEntry {
@@ -386,14 +380,37 @@ TEST_CASE("DBPF reader opens paths longer than MAX_PATH") {
     std::error_code ec;
     std::filesystem::remove_all(extendedDirectory, ec);
 }
+
+TEST_CASE("DBPF reader opens paths written with forward slashes and dot-dot parts") {
+    const auto directory = std::filesystem::temp_directory_path() /
+        (L"dbpf-unnormal-path-" + std::to_wstring(std::chrono::steady_clock::now().time_since_epoch().count()));
+    REQUIRE(std::filesystem::create_directories(directory / L"sub"));
+
+    const DBPF::Tgi tgi{1, 2, 3};
+    const auto buffer = BuildDbpf({TestEntry{tgi, {'T', 'E', 'S', 'T'}}});
+    {
+        std::ofstream file(directory / L"test.dat", std::ios::binary);
+        file.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        REQUIRE(file.good());
+    }
+
+    // As a user might type it: forward slashes and a ".." part.
+    std::wstring unnormal = directory.native();
+    std::replace(unnormal.begin(), unnormal.end(), L'\\', L'/');
+    unnormal += L"/sub/../test.dat";
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadFile(std::filesystem::path(unnormal)));
+    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+
+    std::error_code ec;
+    std::filesystem::remove_all(directory, ec);
+}
 #endif
 
 TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {
     const DBPF::Tgi tgi{0x11111111, 0x22222222, 0x33333333};
-    const std::vector<TestEntry> entries{
-        TestEntry{tgi, SampleQfsPayload()},
-    };
-    auto buffer = BuildDbpf(entries);
+    auto buffer = BuildDbpf({TestEntry{tgi, Sc4CompressedEntry()}});
 
     DBPF::Reader reader;
     REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
@@ -405,24 +422,41 @@ TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
-TEST_CASE("DBPF reader strips chunk header before QFS decompression") {
-    const DBPF::Tgi tgi{0x99999999, 0x88888888, 0x77777777};
-    const auto chunked = WrapChunked(SampleQfsPayload(), 0x10);
-    auto buffer = BuildDbpf({TestEntry{tgi, chunked}});
+TEST_CASE("DBPF reader reads entries that start with the QFS signature as they are") {
+    // SC4 always writes the compressed size first, so a stream at the very start is not compressed data.
+    const DBPF::Tgi tgi{0x11111111, 0x22222222, 0x33333333};
+    const auto bare = SampleQfsPayload();
+    auto buffer = BuildDbpf({TestEntry{tgi, bare}});
 
     DBPF::Reader reader;
     REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == bare);
+}
 
-    const auto& index = reader.GetIndex();
-    REQUIRE(index.size() == 1);
-    auto data = reader.ReadEntryData(index[0]);
-    REQUIRE(data.has_value());
-    REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
+TEST_CASE("DBPF reader leaves uncompressed entries that contain the QFS signature alone") {
+    const DBPF::Tgi tgi{0x2026F0B5, 0x6A231EAA, 0x00000001};
+    // An uncompressed LText whose first character is U+00FB: 10 FB appears at offset 3.
+    const std::vector<uint8_t> ltext{0x02, 0x00, 0x00, 0x10, 0xFB, 0x00, 'a', 0x00};
+    auto buffer = BuildDbpf({TestEntry{tgi, ltext}});
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == ltext);
+}
+
+TEST_CASE("DBPF reader leaves S3D models whose header reads as the QFS signature alone") {
+    const DBPF::Tgi tgi{0x5AD0E817, 0xBADB57F1, 0x00000001};
+    const std::vector<uint8_t> s3d{'3', 'D', 'M', 'D', 0x10, 0xFB, 0x00, 0x00, 0x00, 'H', 'E', 'A', 'D'};
+    auto buffer = BuildDbpf({TestEntry{tgi, s3d}});
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == s3d);
 }
 
 TEST_CASE("DBPF reader applies directory metadata when present") {
     const DBPF::Tgi dataTgi{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC};
-    const TestEntry dataEntry{dataTgi, SampleQfsPayload()};
+    const TestEntry dataEntry{dataTgi, Sc4CompressedEntry()};
     const TestEntry dirEntry{DBPF::kDirectoryTgi, BuildDirectoryPayload(dataTgi, 4)};
     auto buffer = BuildDbpf({dataEntry, dirEntry});
 
@@ -442,6 +476,48 @@ TEST_CASE("DBPF reader applies directory metadata when present") {
     auto data = reader.ReadEntryData(*it);
     REQUIRE(data.has_value());
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
+}
+
+TEST_CASE("DBPF reader reads version 0.0 headers as 1.0") {
+    const DBPF::Tgi tgi{1, 2, 3};
+    auto buffer = BuildDbpf({TestEntry{tgi, {'T', 'E', 'S', 'T'}}});
+    WriteUInt32LE(buffer, 4, 0); // major version
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+
+    WriteUInt32LE(buffer, 4, 1);
+    WriteUInt32LE(buffer, 8, 1); // version 1.1 is still not supported
+    DBPF::Reader unsupported;
+    REQUIRE_FALSE(unsupported.LoadBuffer(buffer.data(), buffer.size()));
+}
+
+TEST_CASE("DBPF reader reads the entries that fit when the index count is too high") {
+    const DBPF::Tgi tgi{1, 2, 3};
+    auto buffer = BuildDbpf({TestEntry{tgi, {'T', 'E', 'S', 'T'}}});
+    WriteUInt32LE(buffer, 36, 0xFFFFFFFF); // entry count
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.GetIndex().size() == 1);
+    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+}
+
+TEST_CASE("DBPF reader keeps files whose directory record is out of bounds") {
+    const DBPF::Tgi dataTgi{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC};
+    const TestEntry dataEntry{dataTgi, {'T', 'E', 'S', 'T'}};
+    const TestEntry dirEntry{DBPF::kDirectoryTgi, BuildDirectoryPayload(dataTgi, 4)};
+    auto buffer = BuildDbpf({dataEntry, dirEntry});
+
+    // Point the directory's index entry past the end of the file.
+    const uint32_t indexOffset = buffer[40] | (buffer[41] << 8) | (buffer[42] << 16) | (buffer[43] << 24);
+    WriteUInt32LE(buffer, indexOffset + 20 + 12, static_cast<uint32_t>(buffer.size() + 100));
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.GetIndex().size() == 2);
+    REQUIRE(reader.ReadEntryData(dataTgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
 }
 
 TEST_CASE("DBPF reader finds entries via masks and catalog labels") {
@@ -585,6 +661,20 @@ TEST_CASE("Exemplar parser handles single and multi-value properties") {
     REQUIRE(std::get<std::string>(stringProp->values[0]) == "Test");
 }
 
+TEST_CASE("Exemplar records return the last copy of a duplicated property") {
+    auto buffer = BuildExemplarBuffer({
+        MakeSingleUInt32Property(0x00000010, 0x00000002),
+        MakeSingleUInt32Property(0x00000010, 0x0000001E),
+    });
+    auto parsed = Exemplar::Parse(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    REQUIRE(parsed.has_value());
+    REQUIRE(parsed->properties.size() == 2);
+    const auto* prop = parsed->FindProperty(0x00000010);
+    REQUIRE(prop != nullptr);
+    CHECK(std::get<uint32_t>(prop->values[0]) == 0x0000001E);
+    CHECK(parsed->GetScalar<uint32_t>(0x00000010) == 0x0000001E);
+}
+
 TEST_CASE("Exemplar parser loads text exemplars with scalar and list values") {
     const std::string text =
         "EQZT1###\n"
@@ -645,6 +735,23 @@ TEST_CASE("Exemplar parser decodes signed hex literals in text exemplars") {
     REQUIRE(prop->values.size() == 2);
     CHECK(std::get<int32_t>(prop->values[0]) == -10);
     CHECK(std::get<int32_t>(prop->values[1]) == 10);
+}
+
+TEST_CASE("Exemplar parser wraps text exemplar integers that do not fit their type") {
+    const std::string text =
+        "EQZT1###\n"
+        "ParentCohort=Key:{0x00000000,0x00000000,0x00000000}\n"
+        "PropCount=0x00000004\n"
+        "0x00000010:{\"Exemplar Type\"}=Uint32:0:{0x0000001E}\n"
+        "0x00000001:{\"Byte\"}=Uint8:0:{256}\n"
+        "0x00000002:{\"Signed\"}=Sint32:0:{4294967295}\n"
+        "0x00000003:{\"Unsigned\"}=Uint32:0:{-1}\n";
+    std::vector<uint8_t> buffer(text.begin(), text.end());
+    auto parsed = Exemplar::Parse(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    REQUIRE(parsed.has_value());
+    CHECK(std::get<uint8_t>(parsed->FindProperty(0x00000001)->values[0]) == 0);
+    CHECK(std::get<int32_t>(parsed->FindProperty(0x00000002)->values[0]) == -1);
+    CHECK(std::get<uint32_t>(parsed->FindProperty(0x00000003)->values[0]) == 0xFFFFFFFF);
 }
 
 TEST_CASE("LText parser decodes UTF-16 payloads") {

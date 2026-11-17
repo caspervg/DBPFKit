@@ -1,6 +1,7 @@
 #include "DBPFReader.h"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <print>
 
@@ -64,52 +65,11 @@ namespace DBPF {
         return true;
     }
 
-    bool IsChunkHeader(const uint8_t* data, size_t size,
-                       uint32_t& chunkHeaderSize, uint32_t& chunkBodySize) {
-        if (size < 9) {
-            return false;
-        }
-        const uint32_t chunkSize = ReadUInt32LE(data);
-        const uint32_t uncompressed = ReadUInt32LE(data + 4);
-        size_t flagOffset = 8;
-        uint8_t code = data[flagOffset];
-        if ((code != 0x10 && code != 0x11) && size >= 11) {
-            flagOffset = 10;
-            code = data[flagOffset];
-        }
-
-        if (code == 0x10 && chunkSize > 0 && flagOffset + 1 + chunkSize <= size) {
-            chunkHeaderSize = flagOffset + 1;
-            chunkBodySize = chunkSize;
-            return true;
-        }
-        if (code == 0x11 && size >= flagOffset + 5) {
-            chunkHeaderSize = flagOffset + 5;
-            uint32_t body = ReadUInt32LE(data + flagOffset + 1);
-            if (body == 0 || chunkHeaderSize + body > size) {
-                return false;
-            }
-            chunkBodySize = body;
-            return true;
-        }
-
-        (void)uncompressed;
-        return false;
-    }
-
-    bool AlignToQfsSignature(const uint8_t*& dataStart, size_t& dataSize) {
-        for (size_t i = 0; i + 1 < dataSize && i < 16; ++i) {
-            const uint16_t candidate = static_cast<uint16_t>(static_cast<uint16_t>(dataStart[i]) << 8) |
-                static_cast<uint16_t>(dataStart[i + 1]);
-            if (candidate == QFS::MAGIC_COMPRESSED) {
-                if (i > 0) {
-                    dataStart += i;
-                    dataSize -= i;
-                }
-                return true;
-            }
-        }
-        return false;
+    // Decides compression from the entry itself, like scdbpf: SC4 writes a 4-byte compressed size, then
+    // the QFS signature 10 FB and a 3-byte decompressed size. An S3D model in SimCity_1.dat has header
+    // bytes that read as the signature but is not compressed.
+    static bool IsCompressedEntry(const std::span<const uint8_t> data) {
+        return data.size() >= 9 && data[4] == 0x10 && data[5] == 0xFB && std::memcmp(data.data(), "3DMD", 4) != 0;
     }
 
     std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const IndexEntry& entry) const {
@@ -120,31 +80,16 @@ namespace DBPF {
             return std::nullopt;
         }
 
-        const uint8_t* dataStart = entryData.span.data();
-        size_t dataSize = entryData.span.size();
-
-        uint32_t chunkHeaderSize = 0;
-        uint32_t chunkBodySize = 0;
-        if (IsChunkHeader(dataStart, dataSize, chunkHeaderSize, chunkBodySize)) {
-            dataStart += chunkHeaderSize;
-            dataSize = chunkBodySize;
+        const auto data = entryData.span;
+        if (!IsCompressedEntry(data)) {
+            return std::vector<uint8_t>(data.begin(), data.end());
         }
 
-        bool _ = AlignToQfsSignature(dataStart, dataSize);
-
-        std::vector data(dataStart, dataStart + dataSize);
-
-        std::span<const uint8_t> dataSpan(data.data(), data.size());
-
-        if (QFS::Decompressor::IsQFSCompressed(dataSpan)) {
-            std::vector<uint8_t> decompressed;
-            auto result = QFS::Decompressor::Decompress(dataSpan, decompressed);
-            if (!result.has_value()) {
-                return std::nullopt;
-            }
-            return decompressed;
+        std::vector<uint8_t> decompressed;
+        if (!QFS::Decompressor::Decompress(data.subspan(4), decompressed).has_value()) {
+            return std::nullopt;
         }
-        return data;
+        return decompressed;
     }
 
     std::optional<std::vector<uint8_t>> Reader::ReadEntryData(const Tgi& tgi) const {
@@ -422,7 +367,8 @@ namespace DBPF {
         mHeader.holeOffsetLocation = ReadUInt32LE(buffer.data() + 52);
         mHeader.holeSize = ReadUInt32LE(buffer.data() + 56);
 
-        if (mHeader.majorVersion != 1 || mHeader.minorVersion != 0) {
+        // Some faulty files say version 0.0; read them as 1.0, like scdbpf does.
+        if ((mHeader.majorVersion != 1 && mHeader.majorVersion != 0) || mHeader.minorVersion != 0) {
             return false;
         }
         if (mHeader.indexType != kSupportedIndexType) {
@@ -444,18 +390,17 @@ namespace DBPF {
     }
 
     bool Reader::ParseIndexSpan(std::span<const uint8_t> buffer) {
+        // Like scdbpf, read the entries that fit when the header counts more than the index holds.
         // Divide instead of multiplying so a huge entry count cannot overflow.
-        if (mHeader.indexEntryCount > buffer.size() / 20) {
-            return false;
-        }
+        const size_t entryCount = std::min<size_t>(mHeader.indexEntryCount, buffer.size() / 20);
 
         const uint8_t* ptr = buffer.data();
         const uint8_t* end = buffer.data() + buffer.size();
 
         std::vector<IndexEntry> parsed;
-        parsed.reserve(mHeader.indexEntryCount);
+        parsed.reserve(entryCount);
 
-        for (uint32_t i = 0; i < mHeader.indexEntryCount; ++i) {
+        for (size_t i = 0; i < entryCount; ++i) {
             if (ptr + 20 > end) {
                 return false;
             }
@@ -491,9 +436,11 @@ namespace DBPF {
             return true;
         }
 
+        // The directory only adds decompressed sizes. When it cannot be read, keep the file and its
+        // entries rather than losing everything in it.
         EntryData directoryData;
         if (!LoadEntryData(*dirIt->second, directoryData)) {
-            return false;
+            return true;
         }
 
         const auto span = directoryData.span;

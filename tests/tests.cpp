@@ -687,6 +687,20 @@ TEST_CASE("Exemplar parser handles single and multi-value properties") {
     REQUIRE(std::get<std::string>(stringProp->values[0]) == "Test");
 }
 
+TEST_CASE("Exemplar records return the last copy of a duplicated property") {
+    auto buffer = BuildExemplarBuffer({
+        MakeSingleUInt32Property(0x00000010, 0x00000002),
+        MakeSingleUInt32Property(0x00000010, 0x0000001E),
+    });
+    auto parsed = Exemplar::Parse(std::span<const uint8_t>(buffer.data(), buffer.size()));
+    REQUIRE(parsed.has_value());
+    REQUIRE(parsed->properties.size() == 2);
+    const auto* prop = parsed->FindProperty(0x00000010);
+    REQUIRE(prop != nullptr);
+    CHECK(std::get<uint32_t>(prop->values[0]) == 0x0000001E);
+    CHECK(parsed->GetScalar<uint32_t>(0x00000010) == 0x0000001E);
+}
+
 TEST_CASE("Exemplar parser loads text exemplars with scalar and list values") {
     const std::string text =
         "EQZT1###\n"

@@ -83,6 +83,7 @@ namespace Exemplar {
         bool isText = false;
         std::vector<Property> properties;
 
+        // Returns the last property with this ID, as an ID may appear more than once.
         [[nodiscard]] const Property* FindProperty(uint32_t id) const;
         [[nodiscard]] bool FindProperties(uint32_t id, std::vector<Property>& result) const;
 

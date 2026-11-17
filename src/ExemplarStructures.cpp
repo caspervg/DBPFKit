@@ -5,9 +5,10 @@
 namespace Exemplar {
 
     const Property* Record::FindProperty(const uint32_t id) const {
-        for (const auto& prop : properties) {
-            if (prop.id == id) {
-                return &prop;
+        // When a property ID appears more than once, the last copy wins, like scdbpf.
+        for (auto it = properties.rbegin(); it != properties.rend(); ++it) {
+            if (it->id == id) {
+                return &*it;
             }
         }
         return nullptr;

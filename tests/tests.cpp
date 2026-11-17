@@ -431,6 +431,40 @@ TEST_CASE("DBPF reader decompresses QFS entries without directory metadata") {
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
+TEST_CASE("DBPF reader decompresses QFS entries after the compressed size") {
+    const DBPF::Tgi tgi{0x11111111, 0x22222222, 0x33333333};
+    const auto qfs = SampleQfsPayload();
+    std::vector<uint8_t> payload(4, 0);
+    WriteUInt32LE(payload, 0, static_cast<uint32_t>(qfs.size() + 4));
+    payload.insert(payload.end(), qfs.begin(), qfs.end());
+    auto buffer = BuildDbpf({TestEntry{tgi, payload}});
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'S', 'C', '4', '!'});
+}
+
+TEST_CASE("DBPF reader leaves uncompressed entries that contain the QFS signature alone") {
+    const DBPF::Tgi tgi{0x2026F0B5, 0x6A231EAA, 0x00000001};
+    // An uncompressed LText whose first character is U+00FB: 10 FB appears at offset 3.
+    const std::vector<uint8_t> ltext{0x02, 0x00, 0x00, 0x10, 0xFB, 0x00, 'a', 0x00};
+    auto buffer = BuildDbpf({TestEntry{tgi, ltext}});
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == ltext);
+}
+
+TEST_CASE("DBPF reader leaves S3D models whose header reads as the QFS signature alone") {
+    const DBPF::Tgi tgi{0x5AD0E817, 0xBADB57F1, 0x00000001};
+    const std::vector<uint8_t> s3d{'3', 'D', 'M', 'D', 0x10, 0xFB, 0x00, 0x00, 0x00, 'H', 'E', 'A', 'D'};
+    auto buffer = BuildDbpf({TestEntry{tgi, s3d}});
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.ReadEntryData(tgi) == s3d);
+}
+
 TEST_CASE("DBPF reader strips chunk header before QFS decompression") {
     const DBPF::Tgi tgi{0x99999999, 0x88888888, 0x77777777};
     const auto chunked = WrapChunked(SampleQfsPayload(), 0x10);

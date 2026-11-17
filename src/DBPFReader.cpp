@@ -1,6 +1,7 @@
 #include "DBPFReader.h"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <print>
 
@@ -97,17 +98,23 @@ namespace DBPF {
         return false;
     }
 
+    // A QFS stream starts at the beginning of the entry, or after the 4-byte compressed size that SC4
+    // writes before it. Looking anywhere else would take uncompressed data that happens to contain the
+    // signature, such as an LText starting with U+00FB, for a stream and fail to decompress it.
     bool AlignToQfsSignature(const uint8_t*& dataStart, size_t& dataSize) {
-        for (size_t i = 0; i + 1 < dataSize && i < 16; ++i) {
-            const uint16_t candidate = static_cast<uint16_t>(static_cast<uint16_t>(dataStart[i]) << 8) |
-                static_cast<uint16_t>(dataStart[i + 1]);
-            if (candidate == QFS::MAGIC_COMPRESSED) {
-                if (i > 0) {
-                    dataStart += i;
-                    dataSize -= i;
-                }
-                return true;
-            }
+        const auto isSignatureAt = [&](const size_t offset) {
+            return offset + 1 < dataSize &&
+                ((static_cast<uint16_t>(dataStart[offset]) << 8) | dataStart[offset + 1]) == QFS::MAGIC_COMPRESSED;
+        };
+        if (isSignatureAt(0)) {
+            return true;
+        }
+        // Like scdbpf: the 4-byte size and 5-byte QFS header must fit, and an S3D model whose header
+        // bytes happen to read as the signature (there is one in SimCity_1.dat) is not compressed.
+        if (dataSize >= 9 && isSignatureAt(4) && std::memcmp(dataStart, "3DMD", 4) != 0) {
+            dataStart += 4;
+            dataSize -= 4;
+            return true;
         }
         return false;
     }

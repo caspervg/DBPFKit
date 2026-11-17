@@ -491,9 +491,11 @@ namespace DBPF {
             return true;
         }
 
+        // The directory only adds decompressed sizes. When it cannot be read, keep the file and its
+        // entries rather than losing everything in it.
         EntryData directoryData;
         if (!LoadEntryData(*dirIt->second, directoryData)) {
-            return false;
+            return true;
         }
 
         const auto span = directoryData.span;

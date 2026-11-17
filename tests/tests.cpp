@@ -470,6 +470,22 @@ TEST_CASE("DBPF reader applies directory metadata when present") {
     REQUIRE(*data == std::vector<uint8_t>{'S', 'C', '4', '!'});
 }
 
+TEST_CASE("DBPF reader keeps files whose directory record is out of bounds") {
+    const DBPF::Tgi dataTgi{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC};
+    const TestEntry dataEntry{dataTgi, {'T', 'E', 'S', 'T'}};
+    const TestEntry dirEntry{DBPF::kDirectoryTgi, BuildDirectoryPayload(dataTgi, 4)};
+    auto buffer = BuildDbpf({dataEntry, dirEntry});
+
+    // Point the directory's index entry past the end of the file.
+    const uint32_t indexOffset = buffer[40] | (buffer[41] << 8) | (buffer[42] << 16) | (buffer[43] << 24);
+    WriteUInt32LE(buffer, indexOffset + 20 + 12, static_cast<uint32_t>(buffer.size() + 100));
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.GetIndex().size() == 2);
+    REQUIRE(reader.ReadEntryData(dataTgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+}
+
 TEST_CASE("DBPF reader finds entries via masks and catalog labels") {
     const DBPF::Tgi fshTgi{0x7AB50E44, 0x0986135E, 0x00000011};
     const DBPF::Tgi s3dTgi{0x5AD0E817, 0xBADB57F1, 0x00000001};

@@ -452,18 +452,17 @@ namespace DBPF {
     }
 
     bool Reader::ParseIndexSpan(std::span<const uint8_t> buffer) {
+        // Like scdbpf, read the entries that fit when the header counts more than the index holds.
         // Divide instead of multiplying so a huge entry count cannot overflow.
-        if (mHeader.indexEntryCount > buffer.size() / 20) {
-            return false;
-        }
+        const size_t entryCount = std::min<size_t>(mHeader.indexEntryCount, buffer.size() / 20);
 
         const uint8_t* ptr = buffer.data();
         const uint8_t* end = buffer.data() + buffer.size();
 
         std::vector<IndexEntry> parsed;
-        parsed.reserve(mHeader.indexEntryCount);
+        parsed.reserve(entryCount);
 
-        for (uint32_t i = 0; i < mHeader.indexEntryCount; ++i) {
+        for (size_t i = 0; i < entryCount; ++i) {
             if (ptr + 20 > end) {
                 return false;
             }

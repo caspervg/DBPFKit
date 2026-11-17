@@ -519,6 +519,17 @@ TEST_CASE("DBPF reader reads version 0.0 headers as 1.0") {
     REQUIRE_FALSE(unsupported.LoadBuffer(buffer.data(), buffer.size()));
 }
 
+TEST_CASE("DBPF reader reads the entries that fit when the index count is too high") {
+    const DBPF::Tgi tgi{1, 2, 3};
+    auto buffer = BuildDbpf({TestEntry{tgi, {'T', 'E', 'S', 'T'}}});
+    WriteUInt32LE(buffer, 36, 0xFFFFFFFF); // entry count
+
+    DBPF::Reader reader;
+    REQUIRE(reader.LoadBuffer(buffer.data(), buffer.size()));
+    REQUIRE(reader.GetIndex().size() == 1);
+    REQUIRE(reader.ReadEntryData(tgi) == std::vector<uint8_t>{'T', 'E', 'S', 'T'});
+}
+
 TEST_CASE("DBPF reader keeps files whose directory record is out of bounds") {
     const DBPF::Tgi dataTgi{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC};
     const TestEntry dataEntry{dataTgi, {'T', 'E', 'S', 'T'}};
